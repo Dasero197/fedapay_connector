@@ -1,0 +1,7 @@
+*.env
+*.log
+*.pyc
+/log
+/fedapay_connector.egg-info
+/__pycache__
+/venv

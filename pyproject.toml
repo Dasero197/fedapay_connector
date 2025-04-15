@@ -1,0 +1,30 @@
+[project]
+name = "fedapay_connector"
+version = "1.0.0"
+description = "Connecteur asynchrone pour les paiements FedaPay"
+readme = "README.md"
+license = { text = "AGPL-3.0-or-later" }
+authors = [
+    { name = "ASSOGBA Dayane", email = "assogbadayane197@gmail.com" }
+]
+keywords = ["fedapay", "paiement", "asynchrone", "API", "connector"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: GNU Affero General Public License v3 or later (AGPLv3+)",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Software Development :: Libraries",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dependencies = [
+    "pydantic[email]>=2.0",
+    "aiohttp>=3.11.16",
+]
+requires-python = ">=3.9"
+
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
