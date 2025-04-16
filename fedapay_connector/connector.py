@@ -231,7 +231,7 @@ class FedapayConnector():
         except Exception as e:
             self.logger.info(e)
 
-    def save_webhook_data(self, id_transaction: int, statut_transaction: str, reference: str, commision: float, fees: int, receipt_url: str, function_callback: Optional[WebhookCallback] = None):
+    def Save_webhook_data(self, id_transaction: int, statut_transaction: str, reference: str, commision: float, fees: int, receipt_url: str, function_callback: Optional[WebhookCallback] = None):
         """
         Méthode à utiliser dans un endpoint de l'API configuré pour recevoir les events webhook de Fedapay.
         Enregistre les données du webhook Fedapay pour une transaction donnée.
@@ -310,7 +310,7 @@ class FedapayConnector():
 
                         event = await request.json()
                         entity = event.get("entity")
-                        fd.save_webhook_data(
+                        fd.Save_webhook_data(
                             entity.get("id"),
                             event.get("name"),
                             entity.get("reference"),
@@ -380,7 +380,7 @@ class FedapayConnector():
 
         return result
     
-    async def Check_Fedapay_status(self, id_transaction:int,api_key:Optional[str]= os.getenv("API_KEY")):
+    async def Check_transaction_status(self, id_transaction:int,api_key:Optional[str]= os.getenv("API_KEY")):
         """
         Vérifie le statut d'une transaction FedaPay.
 
@@ -392,7 +392,7 @@ class FedapayConnector():
             dict: Statut, frais et commission de la transaction.
 
         Example:
-            status = await paiement_fedapay_class.Check_Fedapay_status(12345)
+            status = await paiement_fedapay_class.Check_transaction_status(12345)
         """
         self.logger.info(f"Vérification du statut de la transaction ID: {id_transaction}")
         status_data = await self._check_status(api_key= api_key, id_transaction= id_transaction)

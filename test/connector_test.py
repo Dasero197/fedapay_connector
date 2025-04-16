@@ -34,7 +34,7 @@ async def main():
 
         # Étape 2 : Vérification du statut de la transaction
         print("\nVérification du statut de la transaction...\n")
-        status = await fedapay.Check_Fedapay_status(resp.get("id_transaction_fedapay"))
+        status = await fedapay.Check_transaction_status(resp.get("id_transaction_fedapay"))
         print(f"\nStatut de la transaction : {status}\n")
 
     except Exception as e:
