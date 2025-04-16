@@ -1,5 +1,7 @@
 import os, logging  # noqa: E401
 from logging.handlers import TimedRotatingFileHandler
+from fedapay_connector.enums import Pays
+from fedapay_connector.maps import Monnaies_Map
 
 def initialize_logger():
         """
@@ -42,3 +44,15 @@ def initialize_logger():
 
         logger.info("Logger initialisé avec succès.")
         return logger
+
+def get_currency(pays:Pays):
+        """
+        Fonction interne pour obtenir la devise du pays.
+
+        Args:
+            pays (pays): Enum représentant le pays.
+
+        Returns:
+            str: Code ISO de la devise du pays.
+        """
+        return Monnaies_Map.get(pays).value

@@ -1,16 +1,28 @@
+"""
+FedaPay Connector
+
+Copyright (C) 2025 ASSOGBA Dayane
+
+Ce programme est un logiciel libre : vous pouvez le redistribuer et/ou le modifier
+conformément aux termes de la GNU Affero General Public License publiée par la
+Free Software Foundation, soit la version 3 de la licence, soit (à votre choix)
+toute version ultérieure.
+
+Ce programme est distribué dans l'espoir qu'il sera utile,
+mais SANS AUCUNE GARANTIE ; sans même la garantie implicite de
+COMMERCIALISATION ou D'ADÉQUATION À UN OBJECTIF PARTICULIER.
+Consultez la GNU Affero General Public License pour plus de détails.
+
+Vous devriez avoir reçu une copie de la GNU Affero General Public License
+avec ce programme. Si ce n'est pas le cas, consultez <https://www.gnu.org/licenses/>.
+"""
+
 from fedapay_connector.schemas import PaiementSetup, UserData, PaymentHistory, WebhookHistory
-from fedapay_connector.maps import Monnaies_Map
-from fedapay_connector.enums import Pays
-from fedapay_connector.utils import initialize_logger 
+from fedapay_connector.utils import initialize_logger, get_currency
+from fedapay_connector.types import WebhookCallback, OperationCallback
 from datetime import datetime, timedelta, timezone
-from typing import Optional, Callable, Awaitable
+from typing import Optional
 import os, asyncio, aiohttp  # noqa: E401
-
-
-
-#Type des callbacks utilisées par l'utilisateur pour historiser les operations lui même
-OperationCallback = Callable[[PaymentHistory], Awaitable[None]]
-WebhookCallback = Callable[[WebhookHistory], Awaitable[None]]
 
 class FedapayConnector():
     """
@@ -33,19 +45,6 @@ class FedapayConnector():
         self.received_webhook = {}
         self.logger = initialize_logger()
 
-
-    
-    def _get_currency(self, pays:Pays):
-        """
-        Fonction interne pour obtenir la devise du pays.
-
-        Args:
-            pays (pays): Enum représentant le pays.
-
-        Returns:
-            str: Code ISO de la devise du pays.
-        """
-        return Monnaies_Map.get(pays).value
   
     async def _init_transaction(self, setup: PaiementSetup, client_infos: UserData, montant_paiement : int, callback_url : Optional[str]= None, api_key:Optional[str]= os.getenv("API_KEY")):
         """
@@ -72,7 +71,7 @@ class FedapayConnector():
         
         body = {    "description" : f"Transaction pour {client_infos.prenom} {client_infos.nom}",
                     "amount" : montant_paiement,
-                    "currency" : {"iso" : self._get_currency(setup.pays)},
+                    "currency" : {"iso" : get_currency(setup.pays)},
                     "callback_url" : callback_url,
                     "customer" : {
                         "firstname" : client_infos.prenom,
@@ -234,7 +233,8 @@ class FedapayConnector():
 
     def save_webhook_data(self, id_transaction: int, statut_transaction: str, reference: str, commision: float, fees: int, receipt_url: str, function_callback: Optional[WebhookCallback] = None):
         """
-        Enregistre les données du webhook pour une transaction donnée.
+        Méthode à utiliser dans un endpoint de l'API configuré pour recevoir les events webhook de Fedapay.
+        Enregistre les données du webhook Fedapay pour une transaction donnée.
 
         Args:
             id_transaction (int): ID de la transaction.
@@ -243,8 +243,90 @@ class FedapayConnector():
             commision (float): Commission prélevée par FedaPay.
             fees (int): Frais associés à la transaction.
             receipt_url (str): Lien vers le reçu de la transaction.
-            function_callback (Optional[WebhookCallback]): Fonction de rappel pour traiter les données du webhook.
+            function_callback (Optional[WebhookCallback]): Fonction de rappel pour traiter de manière personnalisée les données du webhook.
+
+        Example:
+            Cas d'un endpoint FastAPI ::
+
+                import hashlib
+                import hmac
+                import os
+                import time
+                from fastapi import APIRouter, HTTPException, Request, status
+                from fedapay_connector import FedapayConnector as FD
+                from enum import Enum
+
+                class Agregateurs(Enum):  # peut être mis dans un fichier différent contenant toutes vos énumérations
+                    FEDAPAY = "Fedapay"
+
+                router = APIRouter(prefix="/paiement", tags=["Centre d'imagerie"])  # ajouter le router à app dans votre fichier main.py pour un code plus propre
+
+                fd = FD()
+
+                def verify_signature(payload: bytes, sig_header: str, secret: str):
+                    # Extraire le timestamp et la signature depuis le header
+                    try:
+                        parts = sig_header.split(",")
+                        timestamp = int(parts[0].split("=")[1])
+                        received_signature = parts[1].split("=")[1]
+                    except (IndexError, ValueError):
+                        raise HTTPException(status_code=400, detail="Malformed signature header")
+
+                    # Calculer la signature HMAC-SHA256
+                    signed_payload = f"{timestamp}.{payload.decode('utf-8')}".encode("utf-8")
+                    expected_signature = hmac.new(
+                        secret.encode("utf-8"), signed_payload, hashlib.sha256
+                    ).hexdigest()
+
+                    # Vérifier si la signature correspond
+                    if not hmac.compare_digest(expected_signature, received_signature):
+                        raise HTTPException(status_code=400, detail="Signature verification failed")
+
+                    # Vérification du délai (pour éviter les requêtes trop anciennes)
+                    if abs(time.time() - timestamp) > 300:  # 5 minutes de tolérance
+                        raise HTTPException(status_code=400, detail="Request is too old")
+
+                    return True
+
+                @router.post("/webhooks", status_code=status.HTTP_200_OK)
+                async def manage_webhook(request: Request):
+                    agregateurs = [agre.value for agre in Agregateurs]
+                    header = request.headers
+                    agregateur = str(header.get("agregateur"))
+                    payload = await request.body()
+
+                    if agregateur not in agregateurs:
+                        raise HTTPException(status.HTTP_404_NOT_FOUND, "Aggrégateur non reconnu")
+
+                    elif agregateur == Agregateurs.FEDAPAY.value:
+                        try:
+                            verify_signature(
+                                payload,
+                                header.get("x-fedapay-signature"),
+                                os.getenv("FEDAPAY_WEBHOOK_KEY_EXT"),  # inclure la clé dans un fichier .env
+                            )
+                        except HTTPException as e:
+                            raise e
+
+                        event = await request.json()
+                        entity = event.get("entity")
+                        fd.save_webhook_data(
+                            entity.get("id"),
+                            event.get("name"),
+                            entity.get("reference"),
+                            entity.get("commission"),
+                            entity.get("fees"),
+                            entity.get("receipt_url"),  # une fonction personnalisée peut être passée ici
+                        )
+                        return {"ok"}
+                    else:
+                        raise HTTPException(
+                            status.HTTP_501_NOT_IMPLEMENTED,
+                            f"Gestion de l'agrégateur: {agregateur} non implémentée",
+                        )
+                        ::
         """
+
         self.logger.info(f"Enregistrement des données du webhook pour la transaction ID: {id_transaction}")
         result = {
              "status" : statut_transaction,

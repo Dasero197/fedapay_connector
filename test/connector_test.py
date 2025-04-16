@@ -20,7 +20,7 @@ async def main():
 
         # Configuration du paiement
         setup = PaiementSetup(pays=Pays.benin, method=MethodesPaiement.moov)
-        client = UserData(nom="ASSOGBA", prenom="Dayane", email="assodayane@gmail.com", tel="+22964000001")
+        client = UserData(nom="ASSOGBA", prenom="Dayane", email="assodayane@gmail.com", tel="64000001")
 
         # Étape 1 : Initialisation du paiement
         print("\nInitialisation du paiement...\n")
