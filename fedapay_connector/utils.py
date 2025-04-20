@@ -2,6 +2,9 @@ import os, logging  # noqa: E401
 from logging.handlers import TimedRotatingFileHandler
 from fedapay_connector.enums import Pays
 from fedapay_connector.maps import Monnaies_Map
+import aiohttp
+import json
+from typing import TypeVar, Callable, Awaitable, ParamSpec
 
 def initialize_logger():
         """
@@ -56,3 +59,43 @@ def get_currency(pays:Pays):
             str: Code ISO de la devise du pays.
         """
         return Monnaies_Map.get(pays).value
+
+
+
+P = ParamSpec("P")  # Paramètres de la fonction
+R = TypeVar("R")    # Type de retour
+
+async def aiohttp_with_error_extractor(
+    callable_func: Callable[P, Awaitable[R]],
+    *args: P.args,
+    **kwargs: P.kwargs
+) -> R:
+    """
+    Exécute une fonction asynchrone utilisant aiohttp et capture les erreurs HTTP
+    en extrayant les détails du message d'erreur retourné par le serveur.
+
+    Cette fonction est utile pour centraliser la gestion des erreurs liées aux
+    requêtes HTTP, en particulier celles retournant un corps JSON expliquant l'erreur.
+
+    Args:
+        callable_func (Callable): Une fonction `async` à exécuter.
+        *args: Les arguments positionnels à passer à la fonction.
+        **kwargs: Les arguments nommés à passer à la fonction.
+
+    Returns:
+        Any: Le résultat retourné par la fonction exécutée.
+
+    Raises:
+        RuntimeError: En cas d'erreur HTTP (`aiohttp.ClientResponseError`),
+        avec les détails extraits du corps de la réponse (si disponible).
+    """
+    try:
+        return await callable_func(*args, **kwargs)
+    except aiohttp.ClientResponseError as e:
+        error_body = await e.response.text() if e.response else None
+        try:
+            error_json = json.loads(error_body) if error_body else {}
+        except json.JSONDecodeError:
+            error_json = {"raw": error_body}
+        raise RuntimeError(f"Erreur HTTP {e.status}: {error_json}") from e
+

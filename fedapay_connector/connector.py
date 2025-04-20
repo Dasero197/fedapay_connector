@@ -18,7 +18,7 @@ avec ce programme. Si ce n'est pas le cas, consultez <https://www.gnu.org/licens
 """
 
 from fedapay_connector.schemas import PaiementSetup, UserData, PaymentHistory, WebhookHistory
-from fedapay_connector.utils import initialize_logger, get_currency
+from fedapay_connector.utils import initialize_logger, get_currency, aiohttp_with_error_extractor
 from fedapay_connector.types import WebhookCallback, OperationCallback
 from datetime import datetime, timedelta, timezone
 from typing import Optional

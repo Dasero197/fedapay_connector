@@ -19,12 +19,12 @@ async def main():
         fedapay = FedapayConnector()
 
         # Configuration du paiement
-        setup = PaiementSetup(pays=Pays.benin, method=MethodesPaiement.moov)
-        client = UserData(nom="ASSOGBA", prenom="Dayane", email="assodayane@gmail.com", tel="64000001")
+        setup = PaiementSetup(pays=Pays.benin, method=MethodesPaiement.mtn_open)
+        client = UserData(nom="ASSOGBA", prenom="Dayane", email="assodayane@gmail.com", tel="0162019988")
 
         # Étape 1 : Initialisation du paiement
         print("\nInitialisation du paiement...\n")
-        resp = await fedapay.Fedapay_pay(setup=setup, client_infos=client, montant_paiement=1000)
+        resp = await fedapay.Fedapay_pay(setup=setup, client_infos=client, montant_paiement=100)
         print(f"\nRéponse de l'initialisation : {resp}\n")
 
         # Vérification si l'initialisation a réussi
