@@ -22,3 +22,16 @@ class MethodesPaiement(str, Enum):
     free_sn = "Free Sénégal"
     airtel_ne = "Airtel Niger"
     mtn_open_gn = "MTN Mobile Money Guinée"
+
+class TransactionStatus(str, Enum):
+    created = "created"
+    pending = "pending"
+    approved = "approved"
+    cancelled = "cancelled"
+    declined = "declined"
+
+class EventFutureStatus(str, Enum):
+    CANCELLED = "cancelled"
+    TIMEOUT = "timeout"
+    RESOLVED = "resolved"
+

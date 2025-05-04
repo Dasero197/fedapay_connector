@@ -1,4 +1,4 @@
-from fedapay_connector.enums import Pays, MethodesPaiement, Monnaies
+from .enums import Pays, MethodesPaiement, Monnaies
 
 Paiement_Map = {
     Pays.benin: {

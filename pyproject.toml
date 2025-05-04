@@ -1,6 +1,6 @@
 [project]
 name = "fedapay_connector"
-version = "1.0.0"
+version = "1.1.0"
 description = "Connecteur asynchrone pour les paiements FedaPay"
 readme = "README.md"
 license = { text = "AGPL-3.0-or-later" }
@@ -23,6 +23,9 @@ classifiers = [
 dependencies = [
     "pydantic[email]>=2.0",
     "aiohttp>=3.11.16",
+    "fastapi>=0.115.12",
+    "uvicorn>=0.34.2",
+
 ]
 requires-python = ">=3.9"
 

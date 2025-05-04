@@ -1,10 +1,9 @@
-import os, logging  # noqa: E401
+import os, logging, hmac, hashlib, time  # noqa: E401
+from fastapi import HTTPException
 from logging.handlers import TimedRotatingFileHandler
-from fedapay_connector.enums import Pays
-from fedapay_connector.maps import Monnaies_Map
-import aiohttp
-import json
-from typing import TypeVar, Callable, Awaitable, ParamSpec
+from .enums import Pays
+from .maps import Monnaies_Map
+
 
 def initialize_logger():
         """
@@ -60,42 +59,27 @@ def get_currency(pays:Pays):
         """
         return Monnaies_Map.get(pays).value
 
-
-
-P = ParamSpec("P")  # Paramètres de la fonction
-R = TypeVar("R")    # Type de retour
-
-async def aiohttp_with_error_extractor(
-    callable_func: Callable[P, Awaitable[R]],
-    *args: P.args,
-    **kwargs: P.kwargs
-) -> R:
-    """
-    Exécute une fonction asynchrone utilisant aiohttp et capture les erreurs HTTP
-    en extrayant les détails du message d'erreur retourné par le serveur.
-
-    Cette fonction est utile pour centraliser la gestion des erreurs liées aux
-    requêtes HTTP, en particulier celles retournant un corps JSON expliquant l'erreur.
-
-    Args:
-        callable_func (Callable): Une fonction `async` à exécuter.
-        *args: Les arguments positionnels à passer à la fonction.
-        **kwargs: Les arguments nommés à passer à la fonction.
-
-    Returns:
-        Any: Le résultat retourné par la fonction exécutée.
-
-    Raises:
-        RuntimeError: En cas d'erreur HTTP (`aiohttp.ClientResponseError`),
-        avec les détails extraits du corps de la réponse (si disponible).
-    """
-    try:
-        return await callable_func(*args, **kwargs)
-    except aiohttp.ClientResponseError as e:
-        error_body = await e.response.text() if e.response else None
+def verify_signature(self, payload: bytes, sig_header: str, secret: str):
+        # Extraire le timestamp et la signature depuis le header
         try:
-            error_json = json.loads(error_body) if error_body else {}
-        except json.JSONDecodeError:
-            error_json = {"raw": error_body}
-        raise RuntimeError(f"Erreur HTTP {e.status}: {error_json}") from e
+            parts = sig_header.split(",")
+            timestamp = int(parts[0].split("=")[1])
+            received_signature = parts[1].split("=")[1]
+        except (IndexError, ValueError):
+            raise HTTPException(status_code=400, detail="Malformed signature header")
 
+        # Calculer la signature HMAC-SHA256
+        signed_payload = f"{timestamp}.{payload.decode('utf-8')}".encode("utf-8")
+        expected_signature = hmac.new(
+            secret.encode("utf-8"), signed_payload, hashlib.sha256
+        ).hexdigest()
+
+        # Vérifier si la signature correspond
+        if not hmac.compare_digest(expected_signature, received_signature):
+            raise HTTPException(status_code=400, detail="Signature verification failed")
+
+        # Vérification du délai (pour éviter les requêtes trop anciennes)
+        if abs(time.time() - timestamp) > 300:  # 5 minutes de tolérance
+            raise HTTPException(status_code=400, detail="Request is too old")
+
+        return True

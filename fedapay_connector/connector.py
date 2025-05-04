@@ -17,12 +17,14 @@ Vous devriez avoir reçu une copie de la GNU Affero General Public License
 avec ce programme. Si ce n'est pas le cas, consultez <https://www.gnu.org/licenses/>.
 """
 
-from fedapay_connector.schemas import PaiementSetup, UserData, PaymentHistory, WebhookHistory
-from fedapay_connector.utils import initialize_logger, get_currency, aiohttp_with_error_extractor
-from fedapay_connector.types import WebhookCallback, OperationCallback
-from datetime import datetime, timedelta, timezone
+from .enums import EventFutureStatus
+from .event import FedapayEvent
+from .models import FedapayStatus, PaiementSetup, UserData, PaymentHistory, WebhookHistory, WebhookTransaction, InitTransaction, FedapayPay
+from .utils import initialize_logger, get_currency
+from .types import WebhookCallback, PaymentCallback
+from .server import WebhookServer
 from typing import Optional
-import os, asyncio, aiohttp  # noqa: E401
+import os, asyncio, aiohttp, inspect  # noqa: E401
 
 class FedapayConnector():
     """
@@ -30,22 +32,32 @@ class FedapayConnector():
     Cette classe permet de gérer les transactions, les statuts et les webhooks liés à FedaPay.
     FONCTIONNE UNIQUEMENT DANS UN CONTEXTE ASYNCHRONE
     """
+    _init = False
     _instance = None  
 
     def __new__(cls, *args, **kwargs):
         if not cls._instance:
-            cls._instance = super(FedapayConnector, cls).__new__(cls, *args, **kwargs)
+            cls._instance = super(FedapayConnector, cls).__new__(cls)
         return cls._instance
      
-    def __init__(self):
-        """
-        Initialise la classe _Paiement_Fedapay avec les paramètres nécessaires.
-        """
-        self.fedapay_url = os.getenv("API_URL")
-        self.received_webhook = {}
-        self.logger = initialize_logger()
-
-  
+    def __init__(self, fedapay_api_url: Optional[str] = os.getenv("API_URL"), use_listen_server: Optional[bool] = False, listen_server_endpoint_name: Optional[str]=os.getenv("ENDPOINT_NAME", "webhooks"), listen_server_port: Optional[int]= 3000, fedapay_webhooks_secret_key: Optional[str]= os.getenv("FEDAPAY_AUTH_KEY")):
+      
+        if self._init is False:
+            self._logger = initialize_logger()
+            self.use_internal_listener = use_listen_server
+            self.fedapay_api_url = fedapay_api_url
+            self.listen_server_port = listen_server_port
+            self.listen_server_endpoint_name = listen_server_endpoint_name
+            self._event_manager: FedapayEvent = FedapayEvent(self._logger)
+            self._payment_callback: PaymentCallback = None
+            self._webhooks_callback: WebhookCallback = None
+            self.accepted_transaction = ["transaction.canceled","transaction.declined","transaction.approved","transaction.deleted"]
+            
+            if use_listen_server is True:
+                self.webhook_server = WebhookServer(_logger= self._logger, endpoint= listen_server_endpoint_name, port=listen_server_port, fedapay_auth_key= fedapay_webhooks_secret_key)        
+            
+            self._init = True
+    
     async def _init_transaction(self, setup: PaiementSetup, client_infos: UserData, montant_paiement : int, callback_url : Optional[str]= None, api_key:Optional[str]= os.getenv("API_KEY")):
         """
         Initialise une transaction avec FedaPay.
@@ -58,14 +70,9 @@ class FedapayConnector():
             api_key (Optional[str]): Clé API pour l'authentification.
 
         Returns:
-            dict: Détails de la transaction initialisée.
-
-        Example:
-            setup = PaiementSetup(pays=pays.benin, method=MethodesPaiement.mtn)
-            client = UserData(nom="Doe", prenom="John", email="john.doe@example.com", tel="66000001")
-            transaction = await paiement_fedapay_class._init_transaction(setup, client, 10000)
+            InitTransaction: instance du model InitTransaction
         """
-        self.logger.info("Initialisation de la transaction avec FedaPay.")
+        self._logger.info("Initialisation de la transaction avec FedaPay.")
         header = {"Authorization" : f"Bearer {api_key}",
                   "Content-Type": "application/json"}
         
@@ -85,19 +92,20 @@ class FedapayConnector():
                     }
 
         async with aiohttp.ClientSession(headers=header,raise_for_status=True) as session:
-            async with session.post(f"{self.fedapay_url}/v1/transactions", json= body) as response:
+            async with session.post(f"{self.fedapay_api_url}/v1/transactions", json= body) as response:
                 response.raise_for_status()  
                 init_response = await response.json()  
 
-        self.logger.info(f"Transaction initialisée avec succès: {init_response}")
+        self._logger.info(f"Transaction initialisée avec succès: {init_response}")
         init_response = init_response.get("v1/transaction")
 
-        return  {
+        #le dict était déja là j'ai juste la flemme de repasser les 4 args lors de l'instancation
+        return  InitTransaction.model_validate({
             "external_id" : init_response.get("id"),
             "status" : init_response.get("status"),
             "external_customer_id" : init_response.get("external_customer_id"),
             "operation": init_response.get("operation")
-                            }
+                            })
     
     async def _get_token(self, id_transaction: int, api_key:Optional[str]= os.getenv("API_KEY")):
         """
@@ -113,16 +121,16 @@ class FedapayConnector():
         Example:
             token_data = await paiement_fedapay_class._get_token(12345)
         """
-        self.logger.info(f"Récupération du token pour la transaction ID: {id_transaction}")
+        self._logger.info(f"Récupération du token pour la transaction ID: {id_transaction}")
         header = {"Authorization" : f"Bearer {api_key}",
                   "Content-Type": "application/json"}
         
         async with aiohttp.ClientSession(headers=header,raise_for_status=True) as session:
-            async with session.post(f"{self.fedapay_url}/v1/transactions/{id_transaction}/token" ) as response:
+            async with session.post(f"{self.fedapay_api_url}/v1/transactions/{id_transaction}/token" ) as response:
                 response.raise_for_status()  
                 data = await response.json()
 
-        self.logger.info(f"Token récupéré avec succès: {data}")
+        self._logger.info(f"Token récupéré avec succès: {data}")
         return {"token":data.get("token"), "payment_link" : data.get("url")} 
     
     async def _set_methode(self, client_infos: UserData, setup: PaiementSetup, token: str, api_key:Optional[str]= os.getenv("API_KEY")):
@@ -140,7 +148,7 @@ class FedapayConnector():
         Example:
             methode_data = await paiement_fedapay_class._set_methode(setup, "token123")
         """
-        self.logger.info(f"Définition de la méthode de paiement pour le token: {token}")
+        self._logger.info(f"Définition de la méthode de paiement pour le token: {token}")
         header = {"Authorization" : f"Bearer {api_key}",
                   "Content-Type": "application/json"}
         
@@ -151,11 +159,11 @@ class FedapayConnector():
                 } }
 
         async with aiohttp.ClientSession(headers=header,raise_for_status=True) as session:
-            async with session.post(f"{self.fedapay_url}/v1/{setup.method.name}", json = body ) as response:
+            async with session.post(f"{self.fedapay_api_url}/v1/{setup.method.name}", json = body ) as response:
                 response.raise_for_status()  
                 data = await response.json()
         
-        self.logger.info(f"Méthode de paiement définie avec succès: {data}")
+        self._logger.info(f"Méthode de paiement définie avec succès: {data}")
         data = data.get("v1/payment_intent")
 
         return {"reference":data.get("reference"),
@@ -170,178 +178,92 @@ class FedapayConnector():
             api_key (Optional[str]): Clé API pour l'authentification.
 
         Returns:
-            dict: Statut, frais et commission de la transaction.
-
-        Example:
-            status = await paiement_fedapay_class._check_status(12345)
+            FedapayStatus: Instance FedapayStatus contenant statut, frais et commission de la transaction.
         """
-        self.logger.info(f"Vérification du statut de la transaction ID: {id_transaction}")
+
+        self._logger.info(f"Vérification du statut de la transaction ID: {id_transaction}")
         header = {"Authorization" : f"Bearer {api_key}",
                   "Content-Type": "application/json"}
         
         
         async with aiohttp.ClientSession(headers=header,raise_for_status=True) as session:
-            async with session.get(f"{self.fedapay_url}/v1/transactions/{id_transaction}" ) as response:
+            async with session.get(f"{self.fedapay_api_url}/v1/transactions/{id_transaction}" ) as response:
                 response.raise_for_status()  
                 data = await response.json()
         
-        self.logger.info(f"Statut de la transaction récupéré: {data}")
+        self._logger.info(f"Statut de la transaction récupéré: {data}")
         data = data.get("v1/transaction")
 
-        return {"status" : data.get("status"),
+        return FedapayStatus.model_validate({"status" : data.get("status"),
                 "fedapay_commission": data.get("commission"),
-                "frais" : data.get("fees") }
+                "frais" : data.get("fees") })
         
     async def _await_external_event(self, id_transaction: int, timeout_return: int):
-        self.logger.info(f"Attente d'un événement externe pour la transaction ID: {id_transaction}")
-        n = int(timeout_return * 2)
-        while n > 0:
-            if id_transaction in self.received_webhook.keys():
-                return True, self.received_webhook.get(id_transaction), None
-            else:
-                await asyncio.sleep(0.5)
-                n -= 1  
-        return False, None, "Timeout, try manual polling"
+        self._logger.info(f"Attente d'un événement externe pour la transaction ID: {id_transaction}")
+        future = self._event_manager.create_future(id_transaction= id_transaction, timeout= timeout_return)
+        result: EventFutureStatus = await asyncio.wait_for(future,None)
+        data = self._event_manager.get_event_data(id_transaction= id_transaction)
+        return result,data
     
-    def _del_transaction(self, id_transaction : int):
-        self.logger.info(f"Suppression de la transaction ID: {id_transaction} des webhooks reçus.")
-        self.received_webhook.pop(id_transaction)
-    
-    def _garbage_cleaner(self):
-        self.logger.info("Nettoyage des webhooks expirés.")
-        for keys in list(self.received_webhook.keys()):
-            webhook = self.received_webhook[keys]
-            if webhook["horodateur"] + timedelta(minutes= 30) < datetime.now(timezone.utc):
-                self.received_webhook.pop(keys)
-        self.logger.info("Webhook Garbage Collected")
 
-    async def _garbage_cleaner_loop(self):
+    def start_webhook_server(self):
         """
-        Lancement de la boucle de nettoyage des webhooks expirés.
-
-        Cette méthode exécute périodiquement le nettoyage des webhooks expirés
-        toutes les 6 heures (21600 secondes).
+        Démarre le serveur FastAPI pour écouter les webhooks de FedaPay dans un thread isolé n'impactant pas le thread principal de l'application
         """
-        self.logger.info("Lancement de la boucle de nettoyage des webhooks.")
-        self.logger.info("Lancement Webhook Garbage collection")
-        try:
-            self._garbage_cleaner()
-            
-            await asyncio.sleep(21600)
-        except Exception as e:
-            self.logger.info(e)
+        if self.use_internal_listener:
+            self._logger.info(f"Démarrage du serveur FastAPI interne sur le port: {self.listen_server_port} avec pour point de terminaison: {"/"+str(self.listen_server_endpoint_name)} pour écouter les webhooks de FedaPay.")
+            self.webhook_server.start_webhook_listenning(self._webhooks_callback)
+        else:
+            self._logger.warning("L'instance Fedapay connectore n'est pas configurée pour utiliser cette methode, passer l'argument use_listen_server a True ")
 
-    def Save_webhook_data(self, id_transaction: int, statut_transaction: str, reference: str, commision: float, fees: int, receipt_url: str, function_callback: Optional[WebhookCallback] = None):
+    def fedapay_save_webhook_data(self, event_dict:dict):
         """
         Méthode à utiliser dans un endpoint de l'API configuré pour recevoir les events webhook de Fedapay.
         Enregistre les données du webhook Fedapay pour une transaction donnée.
 
-        Args:
-            id_transaction (int): ID de la transaction.
-            statut_transaction (str): Statut de la transaction.
-            reference (str): Référence externe de la transaction.
-            commision (float): Commission prélevée par FedaPay.
-            fees (int): Frais associés à la transaction.
-            receipt_url (str): Lien vers le reçu de la transaction.
-            function_callback (Optional[WebhookCallback]): Fonction de rappel pour traiter de manière personnalisée les données du webhook.
-
         Example:
-            Cas d'un endpoint FastAPI ::
 
-                import hashlib
-                import hmac
-                import os
-                import time
-                from fastapi import APIRouter, HTTPException, Request, status
-                from fedapay_connector import FedapayConnector as FD
-                from enum import Enum
+        Vous pouvez créer un endpoint similaire pour exploiter cette methode de maniere personnalisée avec FastAPI
 
-                class Agregateurs(Enum):  # peut être mis dans un fichier différent contenant toutes vos énumérations
-                    FEDAPAY = "Fedapay"
+        @app.post(f"/webhooks", status_code=status.HTTP_200_OK)
+        async def receive_webhooks(request: Request):
+            header = request.headers
+            agregateur = str(header.get("agregateur"))
+            payload = await request.body()
 
-                router = APIRouter(prefix="/paiement", tags=["Centre d'imagerie"])  # ajouter le router à app dans votre fichier main.py pour un code plus propre
-
-                fd = FD()
-
-                def verify_signature(payload: bytes, sig_header: str, secret: str):
-                    # Extraire le timestamp et la signature depuis le header
-                    try:
-                        parts = sig_header.split(",")
-                        timestamp = int(parts[0].split("=")[1])
-                        received_signature = parts[1].split("=")[1]
-                    except (IndexError, ValueError):
-                        raise HTTPException(status_code=400, detail="Malformed signature header")
-
-                    # Calculer la signature HMAC-SHA256
-                    signed_payload = f"{timestamp}.{payload.decode('utf-8')}".encode("utf-8")
-                    expected_signature = hmac.new(
-                        secret.encode("utf-8"), signed_payload, hashlib.sha256
-                    ).hexdigest()
-
-                    # Vérifier si la signature correspond
-                    if not hmac.compare_digest(expected_signature, received_signature):
-                        raise HTTPException(status_code=400, detail="Signature verification failed")
-
-                    # Vérification du délai (pour éviter les requêtes trop anciennes)
-                    if abs(time.time() - timestamp) > 300:  # 5 minutes de tolérance
-                        raise HTTPException(status_code=400, detail="Request is too old")
-
-                    return True
-
-                @router.post("/webhooks", status_code=status.HTTP_200_OK)
-                async def manage_webhook(request: Request):
-                    agregateurs = [agre.value for agre in Agregateurs]
-                    header = request.headers
-                    agregateur = str(header.get("agregateur"))
-                    payload = await request.body()
-
-                    if agregateur not in agregateurs:
-                        raise HTTPException(status.HTTP_404_NOT_FOUND, "Aggrégateur non reconnu")
-
-                    elif agregateur == Agregateurs.FEDAPAY.value:
-                        try:
-                            verify_signature(
-                                payload,
-                                header.get("x-fedapay-signature"),
-                                os.getenv("FEDAPAY_WEBHOOK_KEY_EXT"),  # inclure la clé dans un fichier .env
-                            )
-                        except HTTPException as e:
-                            raise e
-
-                        event = await request.json()
-                        entity = event.get("entity")
-                        fd.Save_webhook_data(
-                            entity.get("id"),
-                            event.get("name"),
-                            entity.get("reference"),
-                            entity.get("commission"),
-                            entity.get("fees"),
-                            entity.get("receipt_url"),  # une fonction personnalisée peut être passée ici
-                        )
-                        return {"ok"}
-                    else:
-                        raise HTTPException(
-                            status.HTTP_501_NOT_IMPLEMENTED,
-                            f"Gestion de l'agrégateur: {agregateur} non implémentée",
-                        )
-                        ::
+            if not agregateur == "Fedapay":
+                raise HTTPException(status.HTTP_404_NOT_FOUND, f"Aggrégateur non reconnu : {agregateur}")
+            
+            verify_signature(
+                payload,
+                header.get("x-fedapay-signature"),
+                self.fedapay_auth_key
+            )
+            
+            event = await request.json()
+            fd.fedapay_save_webhook_data(
+                event,
+                function_callback)
+            
+            return {"ok"}
         """
 
-        self.logger.info(f"Enregistrement des données du webhook pour la transaction ID: {id_transaction}")
-        result = {
-             "status" : statut_transaction,
-             "horodateur" : datetime.now(timezone.utc),
-             "reference" : reference,
-             "fedapay_commission" : commision,
-             "frais" : fees,
-             "lien_recu" : receipt_url
-        }    
-        self.received_webhook[id_transaction] = result
-        if function_callback:
-            self.logger.info(f"Appel de la fonction de rappel avec les données de paiement: {result}")
-            asyncio.create_task(function_callback(WebhookHistory(**result, id_transaction_fedapay=id_transaction)))
+        event_model = WebhookTransaction.model_validate(event_dict)
+        if not event_model.name:
+            self._logger.warning("Le modèle d'événement est vide ou invalide.")
+            return
+        if event_model.name not in self.accepted_transaction:
+            self._logger.warning(f"Please disable listenning for {event_model.name} events in the Fedapay dashboard -- just listen to {self.accepted_transaction} to be efficient")
+            return
+        
+        self._logger.info(f"Enregistrement des données du webhook: {event_model.name}")
+        is_set = self._event_manager.set_event_data(event_model)
+        
+        if self._webhooks_callback and is_set:
+            self._logger.info("Appel de la fonction de rappel personnalisée")
+            asyncio.create_task(self._webhooks_callback(WebhookHistory(**event_model.model_dump())))
 
-    async def Fedapay_pay(self, setup: PaiementSetup, client_infos: UserData, montant_paiement: int, api_key: Optional[str] = os.getenv("API_KEY"), callback_url: Optional[str] = None, callback_function: Optional[OperationCallback] = None):
+    async def fedapay_pay(self, setup: PaiementSetup, client_infos: UserData, montant_paiement: int, api_key: Optional[str] = os.getenv("API_KEY"), callback_url: Optional[str] = None):
         """
         Effectue un paiement via FedaPay.
 
@@ -351,36 +273,29 @@ class FedapayConnector():
             montant_paiement (int): Montant du paiement en centimes.
             api_key (Optional[str]): Clé API pour l'authentification (par défaut, récupérée depuis les variables d'environnement).
             callback_url (Optional[str]): URL de rappel pour les notifications de transaction.
-            callback_function (Optional[OperationCallback]): Fonction de rappel pour historiser les données de paiement.
 
         Returns:
-            dict: Détails de la transaction, incluant l'ID externe, le lien de paiement, et le statut.
+            FedapayPay: Instance du model FedapayPay contenan les détails de la transaction.
         """
-        self.logger.info("Début du processus de paiement via FedaPay.")
+
+        self._logger.info("Début du processus de paiement via FedaPay.")
         init_data = await self._init_transaction(setup= setup, api_key= api_key, client_infos= client_infos, montant_paiement= montant_paiement,  callback_url= callback_url)
-        id_transaction = init_data.get("external_id")
         
-        token_data = await self._get_token(id_transaction=id_transaction, api_key=api_key)
+        token_data = await self._get_token(id_transaction=init_data.id_transaction, api_key=api_key)
         token = token_data.get("token")
 
         set_methode = await self._set_methode(client_infos= client_infos, setup=setup, token=token, api_key=api_key)
 
-        self.logger.info(f"Paiement effectué avec succès: {init_data}")
-        result =  {
-            "external_customer_id" : init_data.get("external_customer_id"),
-            "operation": init_data.get("operation"),
-            "id_transaction_fedapay": id_transaction,
-            "payment_link" : token_data.get("payment_link"),
-            "external_reference": set_methode.get("reference"),
-            "status" : set_methode.get("status")}
+        self._logger.info(f"Paiement effectué avec succès: {init_data.model_dump()}")
+        result = FedapayPay(**init_data.model_dump(), payment_link=token_data.get("payment_link"),external_reference= set_methode.get("reference"), status= set_methode.get("status"), montant= montant_paiement) 
         
-        if callback_function:
-            self.logger.info(f"Appel de la fonction de rappel avec les données de paiement: {result}")
-            await callback_function(PaymentHistory(**result, montant= montant_paiement))
+        if self._payment_callback:
+            self._logger.info(f"Appel de la fonction de rappel avec les données de paiement: {result}")
+            await self._payment_callback(PaymentHistory(**result.model_dump()))
 
         return result
     
-    async def Check_transaction_status(self, id_transaction:int,api_key:Optional[str]= os.getenv("API_KEY")):
+    async def fedapay_check_transaction_status(self, id_transaction:int,api_key:Optional[str]= os.getenv("API_KEY")):
         """
         Vérifie le statut d'une transaction FedaPay.
 
@@ -389,20 +304,16 @@ class FedapayConnector():
             api_key (Optional[str]): Clé API pour l'authentification.
 
         Returns:
-            dict: Statut, frais et commission de la transaction.
-
+            FedapayStatus: Instance FedapayStatus contenant statut, frais et commission de la transaction.
+        
         Example:
-            status = await paiement_fedapay_class.Check_transaction_status(12345)
+            status = await paiement_fedapay_class.fedapay_check_transaction_status(12345)
         """
-        self.logger.info(f"Vérification du statut de la transaction ID: {id_transaction}")
-        status_data = await self._check_status(api_key= api_key, id_transaction= id_transaction)
-        return {
-                    "status" : status_data.get("status"),
-                    "frais": status_data.get("frais"),
-                    "fedapay_commission":status_data.get("fedapay_commission")
-                }
+        self._logger.info(f"Vérification du statut de la transaction ID: {id_transaction}")
+        result = await self._check_status(api_key= api_key, id_transaction= id_transaction)
+        return result                  
 
-    async def Fedapay_finalise(self, id_transaction:int, api_key:Optional[str]= os.getenv("API_KEY")):
+    async def fedapay_finalise(self, id_transaction:int, api_key:Optional[str]= os.getenv("API_KEY"), timeout: Optional[int] = 600):
         """
         Finalise une transaction FedaPay.
 
@@ -411,28 +322,39 @@ class FedapayConnector():
             api_key (Optional[str]): Clé API pour l'authentification.
 
         Returns:
-            tuple: Données de la transaction et erreur éventuelle.
+            tuple: status de l'événement futur et données associées.
 
         Example:
-            final_data, error = await paiement_fedapay_class.Fedapay_finalise(12345)
+            future_event_status, data = await paiement_fedapay_class.fedapay_finalise(12345)
         """
-        self.logger.info(f"Finalisation de la transaction ID: {id_transaction}")
-        resp,data,error = await self._await_external_event(id_transaction,600)
-        if not resp:
-            data = await self._check_status(api_key,id_transaction)
-        self._del_transaction(id_transaction)
-        self.logger.info(f"Transaction finalisée: {data} | {error}")
-        return data,error
+        self._logger.info(f"Finalisation de la transaction ID: {id_transaction}")
+        future_event_result,data = await self._await_external_event(id_transaction,timeout)
+        self._logger.info(f"Transaction finalisée: {future_event_result}")
+        return future_event_result,data
 
-    def Garbage_collection(self):
-        """
-        Nettoie les webhooks expirés.
+    def fedapay_cancel_finalisation_waiting(self, id_transaction: int):
+        return self._event_manager.cancel(id_transaction= id_transaction)
+        
+    def set_payment_callback_function(self, callback_function: PaymentCallback):
+        if not callable(callback_function):
+            raise TypeError("Callback function must be a callable")
+        if not inspect.iscoroutinefunction(callback_function):
+            raise TypeError("Callback function must be a async function")
+        sig = inspect.signature(callback_function)
+        params = list(sig.parameters.values())
+        if len(params) != 1 or params[0].annotation != PaymentHistory:
+            raise TypeError("Callback function must take only one argument of type PaymentHistory")
+        
+        self._payment_callback = callback_function
 
-        Example:
-            paiement_fedapay_class.Garbage_collection()
-        """
-        self.logger.info("Début du processus de collecte des déchets.")
-        try:
-            self._garbage_cleaner()
-        except Exception as e:
-            self.logger.info(f" Webhook Garbage collection errror : {e}")
+    def set_webhook_callback_function(self, callback_function: WebhookCallback):
+        if not callable(callback_function):
+            raise TypeError("Callback function must be a callable")
+        if not inspect.iscoroutinefunction(callback_function):
+            raise TypeError("Callback function must be a async function")
+        sig = inspect.signature(callback_function)
+        params = list(sig.parameters.values())
+        if len(params) != 1 or params[0].annotation != WebhookHistory:
+            raise TypeError("Callback function must take only one argument of type WebhookHistory")
+        
+        self._webhooks_callback = callback_function
