@@ -17,9 +17,9 @@ Vous devriez avoir reçu une copie de la GNU Affero General Public License
 avec ce programme. Si ce n'est pas le cas, consultez <https://www.gnu.org/licenses/>.
 """
 
-from .enums import EventFutureStatus
+from .enums import EventFutureStatus, TypesPaiement
 from .event import FedapayEvent
-from .models import FedapayStatus, PaiementSetup, UserData, PaymentHistory, WebhookHistory, WebhookTransaction, InitTransaction, FedapayPay
+from .models import FedapayStatus, PaiementSetup, UserData, PaymentHistory, WebhookHistory, WebhookTransaction, InitTransaction, FedapayPay, GetToken
 from .utils import initialize_logger, get_currency
 from .types import WebhookCallback, PaymentCallback
 from .server import WebhookServer
@@ -54,7 +54,7 @@ class FedapayConnector():
             self.accepted_transaction = ["transaction.canceled","transaction.declined","transaction.approved","transaction.deleted"]
             
             if use_listen_server is True:
-                self.webhook_server = WebhookServer(_logger= self._logger, endpoint= listen_server_endpoint_name, port=listen_server_port, fedapay_auth_key= fedapay_webhooks_secret_key)        
+                self.webhook_server = WebhookServer(logger= self._logger, endpoint= listen_server_endpoint_name, port=listen_server_port, fedapay_auth_key= fedapay_webhooks_secret_key)        
             
             self._init = True
     
@@ -99,13 +99,10 @@ class FedapayConnector():
         self._logger.info(f"Transaction initialisée avec succès: {init_response}")
         init_response = init_response.get("v1/transaction")
 
-        #le dict était déja là j'ai juste la flemme de repasser les 4 args lors de l'instancation
-        return  InitTransaction.model_validate({
-            "external_id" : init_response.get("id"),
-            "status" : init_response.get("status"),
-            "external_customer_id" : init_response.get("external_customer_id"),
-            "operation": init_response.get("operation")
-                            })
+        return  InitTransaction(external_customer_id= init_response.get("external_customer_id"),
+                                id_transaction= init_response.get("id"),
+                                status = init_response.get("status"),
+                                operation = init_response.get("operation"),)
     
     async def _get_token(self, id_transaction: int, api_key:Optional[str]= os.getenv("API_KEY")):
         """
@@ -131,7 +128,8 @@ class FedapayConnector():
                 data = await response.json()
 
         self._logger.info(f"Token récupéré avec succès: {data}")
-        return {"token":data.get("token"), "payment_link" : data.get("url")} 
+
+        return GetToken(token =data.get("token"), payment_link= data.get("url"))
     
     async def _set_methode(self, client_infos: UserData, setup: PaiementSetup, token: str, api_key:Optional[str]= os.getenv("API_KEY")):
         """
@@ -205,6 +203,18 @@ class FedapayConnector():
         data = self._event_manager.get_event_data(id_transaction= id_transaction)
         return result,data
     
+    def _handle_payment_callback_exception(self, task: asyncio.Task):
+        try:
+            task.result()
+        except Exception as e:
+            self._logger.debug(f"Erreur dans le payment_callback : {e}", stack_info= True)
+
+    def _handle_webhook_callback_exception(self, task: asyncio.Task):
+        try:
+            task.result()
+        except Exception as e:
+            self._logger.debug(f"Erreur dans le webhook_callback : {e}", stack_info= True)
+
 
     def start_webhook_server(self):
         """
@@ -261,7 +271,11 @@ class FedapayConnector():
         
         if self._webhooks_callback and is_set:
             self._logger.info("Appel de la fonction de rappel personnalisée")
-            asyncio.create_task(self._webhooks_callback(WebhookHistory(**event_model.model_dump())))
+            try:
+                task = asyncio.create_task(self._webhooks_callback(WebhookHistory(**event_model.model_dump())))
+                task.add_done_callback(self._handle_webhook_callback_exception)
+            except Exception as e:
+                self._logger(f"Exception Capturer au lancement du _webhooks_callback : {str(e)}")
 
     async def fedapay_pay(self, setup: PaiementSetup, client_infos: UserData, montant_paiement: int, api_key: Optional[str] = os.getenv("API_KEY"), callback_url: Optional[str] = None):
         """
@@ -282,16 +296,27 @@ class FedapayConnector():
         init_data = await self._init_transaction(setup= setup, api_key= api_key, client_infos= client_infos, montant_paiement= montant_paiement,  callback_url= callback_url)
         
         token_data = await self._get_token(id_transaction=init_data.id_transaction, api_key=api_key)
-        token = token_data.get("token")
 
-        set_methode = await self._set_methode(client_infos= client_infos, setup=setup, token=token, api_key=api_key)
+        status = init_data.status
+        ext_ref = None
 
-        self._logger.info(f"Paiement effectué avec succès: {init_data.model_dump()}")
-        result = FedapayPay(**init_data.model_dump(), payment_link=token_data.get("payment_link"),external_reference= set_methode.get("reference"), status= set_methode.get("status"), montant= montant_paiement) 
+        if setup.type_paiement == TypesPaiement.SANS_REDIRECTION:
+
+            set_methode = await self._set_methode(client_infos= client_infos, setup=setup, token=token_data.token, api_key=api_key)
+            status = set_methode.get("status")
+            ext_ref = set_methode.get("reference")
+
+        self._logger.info(f"Paiement traité avec succès: {init_data.model_dump()}")
+
+        result = FedapayPay(**init_data.model_dump(exclude= {"status"}), payment_link=token_data.payment_link,external_reference= ext_ref, status= status, montant= montant_paiement) 
         
         if self._payment_callback:
             self._logger.info(f"Appel de la fonction de rappel avec les données de paiement: {result}")
-            await self._payment_callback(PaymentHistory(**result.model_dump()))
+            try:
+                task = asyncio.create_task(self._payment_callback(PaymentHistory(**result.model_dump())))
+                task.add_done_callback(self._handle_payment_callback_exception)
+            except Exception as e:
+                self._logger(f"Exception Capturer au lancement du _payment_callback : {str(e)}")
 
         return result
     

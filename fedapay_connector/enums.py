@@ -7,6 +7,8 @@ class Pays(str, Enum):
     senegal = "sn"
     togo = "tg"
     guinee = "gn"
+    mali = "ml"
+    burkina_faso = "bf"
 
 class Monnaies(str, Enum):
     xof = "XOF"
@@ -35,3 +37,6 @@ class EventFutureStatus(str, Enum):
     TIMEOUT = "timeout"
     RESOLVED = "resolved"
 
+class TypesPaiement(str, Enum):
+    AVEC_REDIRECTION = "avec_redirection"
+    SANS_REDIRECTION = "sans_redirection"

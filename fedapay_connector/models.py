@@ -2,13 +2,12 @@ from typing import Optional, List, Dict
 from datetime import datetime
 from pydantic import BaseModel, model_validator,EmailStr
 from .maps import Paiement_Map
-from .enums import Pays, MethodesPaiement
+from .enums import Pays, MethodesPaiement, TypesPaiement
 from .exceptions import InvalidCountryPaymentCombination
 
 
 class Metadata(BaseModel):
     expire_schedule_jobid: Optional[str] = None
-
 
 class Customer(BaseModel):
     klass: Optional[str] = None
@@ -22,7 +21,6 @@ class Customer(BaseModel):
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
     deleted_at: Optional[datetime] = None
-
 
 class Currency(BaseModel):
     klass: Optional[str] = None
@@ -38,17 +36,14 @@ class Currency(BaseModel):
     updated_at: Optional[datetime] = None
     modes: Optional[List[str]] = None
 
-
 class AssetUrls(BaseModel):
     original: Optional[str] = None
     thumbnail: Optional[str] = None
-
 
 class AssetMetadata(BaseModel):
     filename: Optional[str] = None
     size: Optional[int] = None
     mime_type: Optional[str] = None
-
 
 class Asset(BaseModel):
     klass: Optional[str] = None
@@ -60,14 +55,12 @@ class Asset(BaseModel):
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
-
 class UserAccount(BaseModel):
     klass: Optional[str] = None
     id: Optional[int] = None
     account_id: Optional[int] = None
     user_id: Optional[int] = None
     role_id: Optional[int] = None
-
 
 class User(BaseModel):
     klass: Optional[str] = None
@@ -84,14 +77,12 @@ class User(BaseModel):
     locale: Optional[str] = None
     two_fa_enabled: Optional[bool] = None
 
-
 class ApiKey(BaseModel):
     klass: Optional[str] = None
     id: Optional[int] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
     public_key: Optional[str] = None
-
 
 class Balance(BaseModel):
     klass: Optional[str] = None
@@ -100,7 +91,6 @@ class Balance(BaseModel):
     mode: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
-
 
 class Account(BaseModel):
     klass: Optional[str] = None
@@ -149,7 +139,6 @@ class Account(BaseModel):
     api_keys: Optional[List[ApiKey]] = None
     balances: Optional[List[Balance]] = None
 
-
 class Transaction(BaseModel):
     klass: Optional[str] = None
     id: Optional[int] = None
@@ -191,13 +180,11 @@ class Transaction(BaseModel):
     balance: Optional[Dict] = None
     refunds: Optional[List[Dict]] = None
 
-
 class WebhookTransaction(BaseModel):
     name: Optional[str] = None
     object: Optional[str] = None
     entity: Optional[Transaction] = None
     account: Optional[Account] = None
-
 
 class UserData(BaseModel):
     nom: str
@@ -207,29 +194,50 @@ class UserData(BaseModel):
 
 class PaiementSetup(BaseModel):
     pays: Pays
-    method: MethodesPaiement
+    method: Optional[MethodesPaiement] = None
+    type_paiement: Optional[TypesPaiement] = TypesPaiement.SANS_REDIRECTION
 
     @model_validator(mode='after')
     def check_valid_combination(self):
         Pays = self.pays
         method = self.method
+        type_paiement = self.type_paiement
 
-        # méthodes supportées
-        if method not in Paiement_Map.get(Pays, set()):
-            raise InvalidCountryPaymentCombination(f"Méthode de paiement [{method}] non supportée pour le pays [{Pays}]")
+        if type_paiement == TypesPaiement.SANS_REDIRECTION:
+            # Vérification de la méthode de paiement pour les pays avec paiement sans redirection
+            if Pays not in Paiement_Map.keys():
+                raise InvalidCountryPaymentCombination(f"Le pays [{Pays}] ne supporte pas le paiement sans redirection")
+            
+            # Vérification de la méthode de paiement pour les pays avec paiement sans redirection
+            if method is None:
+                raise InvalidCountryPaymentCombination("La méthode de paiement est requise pour le paiement sans redirection")
+            
+            # méthodes supportées
+            if method not in Paiement_Map.get(Pays, set()):
+                raise InvalidCountryPaymentCombination(f"Méthode de paiement [{method}] non supportée pour le pays [{Pays}]")
+            
+        elif type_paiement == TypesPaiement.AVEC_REDIRECTION:
+            if method is not None:
+                print("[warning] La méthode de paiement est ignorée pour le paiement avec redirection")
+            self.method = None
+
         return self
 
 
 class InitTransaction(BaseModel):
-    id_transaction : Optional[str]=None
+    id_transaction : Optional[int]=None
     status : Optional[str]=None
     external_customer_id : Optional[int]=None
     operation : Optional[str]=None
+
+class GetToken(BaseModel):
+    token: Optional[str]=None
+    payment_link: Optional[str]=None
     
 class FedapayPay(InitTransaction):
     payment_link: Optional[str]=None
     montant: Optional[float]=None
-    external_reference: Optional[int]=None
+    external_reference: Optional[str]=None
 
 class FedapayStatus(BaseModel):
     status : Optional[str]=None

@@ -33,3 +33,4 @@ Monnaies_Map = {
     Pays.senegal: Monnaies.xof,
     Pays.togo: Monnaies.xof,
 }
+

@@ -59,7 +59,7 @@ def get_currency(pays:Pays):
         """
         return Monnaies_Map.get(pays).value
 
-def verify_signature(self, payload: bytes, sig_header: str, secret: str):
+def verify_signature(payload: bytes, sig_header: str, secret: str):
         # Extraire le timestamp et la signature depuis le header
         try:
             parts = sig_header.split(",")

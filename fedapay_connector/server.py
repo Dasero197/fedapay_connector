@@ -40,8 +40,7 @@ class WebhookServer:
             
             event = await request.json()
             fd.fedapay_save_webhook_data(
-                event,
-                function_callback)
+                event)
             
             return {"ok"}
         
