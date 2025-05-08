@@ -71,6 +71,16 @@ class FedapayEvent:
         else:
             self._logger.info(f"Future for id_transaction '{id_transaction}' already resolved or cancelled before")
         return False
+    
+    def cancel_all(self, reason: Optional[str] = "All waiting event cancelled by user"):
+        self._logger.info(f"Cancelling all futures -- reason : {reason} ")
+        for id in self._processing_results_futures.keys():
+            future = self._processing_results_futures.pop(id, None)
+            if future and not future.done():
+                self._asyncio_event_loop.call_soon_threadsafe(future.set_result,EventFutureStatus.CANCELLED)
+                self._logger.info(f"Future for id_transaction '{id}' cancelled")
+            else:
+                self._logger.info(f"Future for id_transaction '{id}' already resolved or cancelled before")
 
     def has_future(self, id_transaction: int) -> bool:
         return id_transaction in self._processing_results_futures

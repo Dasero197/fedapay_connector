@@ -40,10 +40,10 @@ class FedapayConnector():
             cls._instance = super(FedapayConnector, cls).__new__(cls)
         return cls._instance
      
-    def __init__(self, fedapay_api_url: Optional[str] = os.getenv("API_URL"), use_listen_server: Optional[bool] = False, listen_server_endpoint_name: Optional[str]=os.getenv("ENDPOINT_NAME", "webhooks"), listen_server_port: Optional[int]= 3000, fedapay_webhooks_secret_key: Optional[str]= os.getenv("FEDAPAY_AUTH_KEY")):
+    def __init__(self, fedapay_api_url: Optional[str] = os.getenv("API_URL"), use_listen_server: Optional[bool] = False, listen_server_endpoint_name: Optional[str]=os.getenv("ENDPOINT_NAME", "webhooks"), listen_server_port: Optional[int]= 3000, fedapay_webhooks_secret_key: Optional[str]= os.getenv("FEDAPAY_AUTH_KEY"), print_log_to_console: Optional[bool]=False, save_log_to_file: Optional[bool]= True):
       
         if self._init is False:
-            self._logger = initialize_logger()
+            self._logger = initialize_logger(print_log_to_console, save_log_to_file)
             self.use_internal_listener = use_listen_server
             self.fedapay_api_url = fedapay_api_url
             self.listen_server_port = listen_server_port
@@ -383,3 +383,15 @@ class FedapayConnector():
             raise TypeError("Callback function must take only one argument of type WebhookHistory")
         
         self._webhooks_callback = callback_function
+
+    def cancel_all_future_event(self, reason: Optional[str] = None):
+        try:
+            self._event_manager.cancel_all(reason)
+        except Exception as e:
+            self._logger.error(f"Exception occurs cancelling all futures -- error : {e}")
+
+    def cancel_future_event(self, transaction_id: int):
+        try:
+            self._event_manager.cancel(transaction_id)
+        except Exception as e:
+            self._logger.error(f"Exception occurs cancelling future for transaction : {transaction_id} -- error : {e}")

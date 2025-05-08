@@ -1,11 +1,12 @@
 import os, logging, hmac, hashlib, time  # noqa: E401
+from typing import Optional
 from fastapi import HTTPException
 from logging.handlers import TimedRotatingFileHandler
 from .enums import Pays
 from .maps import Monnaies_Map
 
 
-def initialize_logger():
+def initialize_logger(print_log:Optional[bool]= False, save_log_to_file:Optional[bool]= True):
         """
         Initialise le logger pour afficher les logs dans la console et les enregistrer dans un fichier journalier.
         Le fichier de log est enregistré dans le dossier `log` avec un fichier journalier."""
@@ -26,23 +27,25 @@ def initialize_logger():
         log_format = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
         # Handler pour la console
-        console_handler = logging.StreamHandler()
-        console_handler.setFormatter(log_format)
-        logger.addHandler(console_handler)
+        if print_log is True:
+            console_handler = logging.StreamHandler()
+            console_handler.setFormatter(log_format)
+            logger.addHandler(console_handler)
 
         # Handler pour le fichier journalier
-        file_handler = TimedRotatingFileHandler(
-            filename=os.path.join(log_dir, 'fedapay.log'),
-            when='midnight',
-            interval=1,
-            backupCount=90,  # Conserver les logs des 90 derniers jours
-            encoding='utf-8'
-        )
-        file_handler.setLevel(logging.DEBUG)
-        file_handler.suffix = "%Y-%m-%d"
-        file_handler.namer = lambda name: name + ".log"
-        file_handler.setFormatter(log_format)
-        logger.addHandler(file_handler)
+        if save_log_to_file is True:
+            file_handler = TimedRotatingFileHandler(
+                filename=os.path.join(log_dir, 'fedapay.log'),
+                when='midnight',
+                interval=1,
+                backupCount=90,  # Conserver les logs des 90 derniers jours
+                encoding='utf-8'
+            )
+            file_handler.setLevel(logging.DEBUG)
+            file_handler.suffix = "%Y-%m-%d"
+            file_handler.namer = lambda name: name + ".log"
+            file_handler.setFormatter(log_format)
+            logger.addHandler(file_handler)
 
         logger.info("Logger initialisé avec succès.")
         return logger
