@@ -2,7 +2,7 @@ from typing import Optional, List, Dict
 from datetime import datetime
 from pydantic import BaseModel, model_validator,EmailStr
 from .maps import Paiement_Map
-from .enums import Pays, MethodesPaiement, TypesPaiement
+from .enums import Pays, MethodesPaiement, TypesPaiement, TransactionStatus
 from .exceptions import InvalidCountryPaymentCombination
 
 
@@ -146,7 +146,7 @@ class Transaction(BaseModel):
     amount: Optional[float] = None
     description: Optional[str] = None
     callback_url: Optional[str] = None
-    status: Optional[str] = None
+    status: Optional[TransactionStatus] = None
     customer_id: Optional[int] = None
     currency_id: Optional[int] = None
     mode: Optional[str] = None

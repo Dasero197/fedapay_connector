@@ -29,8 +29,9 @@ class TransactionStatus(str, Enum):
     created = "created"
     pending = "pending"
     approved = "approved"
-    cancelled = "cancelled"
+    canceled = "canceled"
     declined = "declined"
+    deleted = "deleted"
 
 class EventFutureStatus(str, Enum):
     CANCELLED = "cancelled"
