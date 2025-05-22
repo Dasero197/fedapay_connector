@@ -25,7 +25,7 @@ async def main():
         print(f"Webhook reçu : {data.__dict__}")
 
     # Creation de l'instance Fedapay Connector
-    fedapay = FedapayConnector(listen_for_webhook= True) 
+    fedapay = FedapayConnector(use_listen_server= True) 
 
     # Configuration des callbacks
     fedapay.set_payment_callback_function(payment_callback)
@@ -36,10 +36,11 @@ async def main():
 
     # Configuration du paiement
     setup = PaiementSetup(pays=Pays.benin, method=MethodesPaiement.mtn_open)
-    client = UserData(nom="john", prenom="doe", email="myemail@domain.com", tel="+22962626262")
+    client = UserData(nom="john", prenom="doe", email="myemail@domain.com", tel="0162626262")
+    payment_contact = "0162626262"
 
     # Initialisation du paiement
-    resp = await fedapay.fedapay_pay(setup=setup, client_infos=client, montant_paiement=1000)
+    resp = await fedapay.fedapay_pay(setup=setup, client_infos=client, montant_paiement=1000, payment_contact= payment_contact)
     print(resp.model_dump())
 
     # Finalisation du paiement
@@ -76,7 +77,7 @@ Dans des cas d'usage comme pour un backend FastAPI vous devrez faire l'initialis
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Creation de l'instance Fedapay Connector
-    fedapay = FedapayConnector(listen_for_webhook= False) # 'listen_for_webhook' a False parce que inutile dans une contexte FastAPI, construiser directement votre endpoint et utiliser 'fedapay_save_webhook_data' pour communiquer les event a fedapay connector
+    fedapay = FedapayConnector(use_listen_server= False) # 'use_listen_server' a False parce que inutile dans une contexte FastAPI, construiser directement votre endpoint et utiliser 'fedapay_save_webhook_data' pour communiquer les event a fedapay connector
 
     # importer ou definissez prealablement les callabacks si voulu
     # Configuration des callbacks
@@ -106,7 +107,7 @@ Il s'agit de:
 
 - API_URL : Url api fedapay (sandbox ou live)
 
-- FEDAPAY_AUTH_KEY : Clé secrete de la webhook configuré disposible dans votre pannel Fedapay
+- FEDAPAY_AUTH_KEY : Clé secrete de la webhook configuré disponible dans votre pannel Fedapay
 
 - ENDPOINT_NAME : Nom attendu pour le point terminaison exposé par le serveur interne
 

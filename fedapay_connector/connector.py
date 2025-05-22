@@ -235,26 +235,27 @@ class FedapayConnector():
 
         Vous pouvez créer un endpoint similaire pour exploiter cette methode de maniere personnalisée avec FastAPI
 
-        @app.post(f"/webhooks", status_code=status.HTTP_200_OK)
+        @router.post(
+            f"{os.getenv('ENDPOINT_NAME', 'webhooks')}", status_code=status.HTTP_200_OK
+        )
         async def receive_webhooks(request: Request):
             header = request.headers
             agregateur = str(header.get("agregateur"))
             payload = await request.body()
+            fd = fedapay_connector.FedapayConnector(use_listen_server=False)
 
             if not agregateur == "Fedapay":
-                raise HTTPException(status.HTTP_404_NOT_FOUND, f"Aggrégateur non reconnu : {agregateur}")
-            
-            verify_signature(
-                payload,
-                header.get("x-fedapay-signature"),
-                self.fedapay_auth_key
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Accès refusé",
+                )
+
+            fedapay_connector.utils.verify_signature(
+                payload, header.get("x-fedapay-signature"), os.getenv("FEDAPAY_AUTH_KEY")
             )
-            
             event = await request.json()
-            fd.fedapay_save_webhook_data(
-                event,
-                function_callback)
-            
+            fd.fedapay_save_webhook_data(event)
+
             return {"ok"}
         """
 

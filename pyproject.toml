@@ -1,6 +1,6 @@
 [project]
 name = "fedapay_connector"
-version = "1.2.1"
+version = "1.2.2"
 description = "Connecteur asynchrone pour les paiements FedaPay"
 readme = "README.md"
 license = { text = "AGPL-3.0-or-later" }
