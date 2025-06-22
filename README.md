@@ -103,7 +103,7 @@ Fedapay Connector à besoin de certaines variable environement qui peuvent toute
 
 Il s'agit de:
 
-- API_KEY : Clé api disponible dans l'onglet  Api sur votre pannel Fedapay
+- FEDAPAY_API_KEY : Clé api disponible dans l'onglet  Api sur votre pannel Fedapay
 
 - API_URL : Url api fedapay (sandbox ou live)
 

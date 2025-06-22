@@ -14,7 +14,6 @@ dnspython==2.7.0
 docutils==0.21.2
 email_validator==2.2.0
 fastapi==0.115.12
--e git+https://github.com/Dasero197/fedapay_connector.git@ca1ce35ec5f4a35fc301ee575e5c2941ae018464#egg=fedapay_connector
 frozenlist==1.5.0
 h11==0.16.0
 httpcore==1.0.8
