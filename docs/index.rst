@@ -6,10 +6,24 @@
 Welcome to fedapay connector's documentation!
 =============================================
 
+.. autosummary::
+   :toctree: _autosummary
+   :recursive:
+
+   fedapay_connector.connector
+   fedapay_connector.models
+   fedapay_connector.types
+   fedapay_connector.server
+   fedapay_connector.event
+   fedapay_connector.utils
+
 .. toctree::
    :maxdepth: 2
    :caption: Contents:
 
+   installation
+   usage/index
+   api/index
 
 
 Indices and tables

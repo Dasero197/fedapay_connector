@@ -51,9 +51,26 @@ import os, asyncio, aiohttp  # noqa: E401
 
 class FedapayConnector:
     """
-    Classe principale pour interagir avec l'API FedaPay.
-    Cette classe permet de gérer les transactions, les statuts et les webhooks liés à FedaPay.
-    FONCTIONNE UNIQUEMENT DANS UN CONTEXTE ASYNCHRONE
+    Client asynchrone pour l'API FedaPay.
+
+    Ce client implémente un pattern Singleton et gère automatiquement :
+    - Les paiements FedaPay
+    - Les webhooks
+    - La persistence des événements
+    - Les callbacks personnalisés
+
+    Args:
+        fedapay_api_url (Optional[str]): URL de l'API FedaPay
+        use_listen_server (Optional[bool]): Utiliser le serveur webhook intégré
+        listen_server_endpoint_name (Optional[str]): Nom de l'endpoint webhook
+        listen_server_port (Optional[int]): Port du serveur webhook
+        fedapay_webhooks_secret_key (Optional[str]): Clé secrète webhook
+        print_log_to_console (Optional[bool]): Afficher les logs dans la console
+        save_log_to_file (Optional[bool]): Sauvegarder les logs dans un fichier
+        callback_timeout (Optional[float]): Délai d'attente pour la finalisation de l'exécution des callbacks lors de l'arrêt de l'application
+
+    Note:
+        Les variables d'environnement peuvent être utilisées pour la configuration
     """
 
     _init = False
@@ -118,31 +135,6 @@ class FedapayConnector:
             self.callback_timeout = callback_timeout
 
             self._init = True
-
-    def set_on_persited_listening_processes_loading_finished_callback(
-        self, callback: OnPersistedProcessReloadFinishedCallback
-    ):
-        validate_callback(
-            callback,
-            {
-                "future_event_status": EventFutureStatus,
-                "data": list[WebhookTransaction] | None,
-            },
-            "persited_listening_processes_loading_finished callback",
-        )
-        if callback:
-            self._on_reload_finished_callback = callback
-
-    async def load_persisted_listening_processes(self):
-        """
-        Doit être appelé explicitement au démarrage de l'application si
-        vous souhaitez rétablir les potentielles écoutes perdues lors du dernier redémarrage de l'application
-        """
-        if not self._on_reload_finished_callback:
-            raise ConfigError(
-                "Callback not set - Call 'set_on_persited_listening_processes_loading_finished_callback' before to set it and retry"
-            )
-        await self._event_manager.load_persisted_processes()
 
     async def _init_transaction(
         self,
@@ -473,7 +465,16 @@ class FedapayConnector:
     async def fedapay_save_webhook_data(self, event_dict: dict):
         """
         Méthode à utiliser dans un endpoint de l'API configuré pour recevoir les events webhook de Fedapay.
-        Enregistre les données du webhook Fedapay pour une transaction donnée.
+        Traite et sauvegarde les données d'un webhook FedaPay.
+
+        Cette méthode est utilisée pour intégrer les webhooks dans une API existante.
+
+        Args:
+            event_dict (dict): Données brutes du webhook
+
+        Raises:
+            ValidationError: Format de données invalide
+            EventError: Erreur de traitement de l'événement
 
         Example:
 
@@ -501,6 +502,11 @@ class FedapayConnector:
             fd.fedapay_save_webhook_data(event)
 
             return {"ok"}
+
+        Note:
+        Seuls les événements configurés dans accepted_transaction sont traités
+        Les callbacks configurés sont exécutés de façon asynchrone
+
         """
 
         event_model = WebhookTransaction.model_validate(event_dict)
@@ -553,6 +559,10 @@ class FedapayConnector:
 
         Returns:
             FedapayPay: Instance du model FedapayPay contenan les détails de la transaction.
+
+        Raises:
+            ConfigError: Configuration invalide
+            APIError: Erreur API FedaPay
         """
 
         self._logger.info("Début du processus de paiement via FedaPay.")
@@ -635,22 +645,33 @@ class FedapayConnector:
     async def fedapay_finalise(
         self,
         id_transaction: int,
-        api_key: Optional[str] = os.getenv("FEDAPAY_API_KEY"),
         timeout: Optional[int] = 600,
     ):
         """
-        Finalise une transaction FedaPay.
+        Finalise et attend le résultat d'une transaction FedaPay.
+
+        Attend la réception d'un webhook ou le timeout pour une transaction donnée.
 
         Args:
-            id_transaction (int): ID de la transaction.
-            api_key (Optional[str]): Clé API pour l'authentification.
+            id_transaction (int): ID de la transaction à finaliser
+            timeout (Optional[int]): Délai d'attente maximum en secondes
 
         Returns:
-            tuple: status de l'événement futur et données associées.
+            tuple[EventFutureStatus, Optional[list[WebhookTransaction]]]:
+                - Status de l'événement (RESOLVED, TIMEOUT, CANCELLED)
+                - Liste des webhooks reçus ou None
 
-        Example:
-            future_event_status, data = await paiement_fedapay_class.fedapay_finalise(12345)
+        Raises:
+            ConfigError: Configuration API invalide
+            TimeoutError: Délai d'attente dépassé
+            CancelledError: Attente annulée
+
+        Note:
+            Le timeout par défaut est de 600 secondes (10 minutes)
+            Une vérification manuelle est faites à la fin de chaque timeout automatiquement en interne
+            donc si vous recever un timeout c'est que rien ne s'est vraiment passé
         """
+
         self._logger.info(f"Finalisation de la transaction ID: {id_transaction}")
         future_event_result, data = await self._await_external_event(
             id_transaction, timeout
@@ -659,15 +680,57 @@ class FedapayConnector:
         return future_event_result, data
 
     async def fedapay_cancel_finalisation_waiting(self, id_transaction: int):
+        """
+        Annule l'attente de finalisation d'une transaction FedaPay.
+
+        Args:
+            id_transaction (int): ID de la transaction à annuler
+
+        """
         return await self._event_manager.cancel(id_transaction=id_transaction)
 
+    def set_on_persited_listening_processes_loading_finished_callback(
+        self, callback: OnPersistedProcessReloadFinishedCallback
+    ):
+        """
+        Définit le callback à appeler lorsque le chargement des processus d'écoute persistés est terminé.
+        """
+        validate_callback(
+            callback,
+            {
+                "future_event_status": EventFutureStatus,
+                "data": list[WebhookTransaction] | None,
+            },
+            "persited_listening_processes_loading_finished callback",
+        )
+        if callback:
+            self._on_reload_finished_callback = callback
+
+    async def load_persisted_listening_processes(self):
+        """
+        Charge les processus d'écoute persistés depuis la base de données.
+        Doit être appelé explicitement au démarrage de l'application si
+        vous souhaitez rétablir les potentielles écoutes perdues lors du dernier redémarrage de l'application
+        """
+        if not self._on_reload_finished_callback:
+            raise ConfigError(
+                "Callback not set - Call 'set_on_persited_listening_processes_loading_finished_callback' before to set it and retry"
+            )
+        await self._event_manager.load_persisted_processes()
+
     def set_payment_callback_function(self, callback_function: PaymentCallback):
+        """
+        le callback à appeler lorsqu'un nouveau paiement est initialisé (appel de fedapay_pay)
+        """
         validate_callback(
             callback_function, {"payment": PaymentHistory}, "Payment callback"
         )
         self._payment_callback = callback_function
 
     def set_webhook_callback_function(self, callback_function: WebhookCallback):
+        """
+        Définit le callback à appeler lorsque le webhook valide est reçu.
+        """
         validate_callback(
             callback_function, {"webhook_data": WebhookHistory}, "Webhook callback"
         )
@@ -675,6 +738,9 @@ class FedapayConnector:
         self._webhooks_callback = callback_function
 
     async def cancel_all_future_event(self, reason: Optional[str] = None):
+        """
+        Annule toutes les écoutes actives.
+        """
         try:
             await self._event_manager.cancel_all(reason)
         except Exception as e:
@@ -683,6 +749,13 @@ class FedapayConnector:
             )
 
     async def cancel_future_event(self, transaction_id: int):
+        """
+        Anulle l'écoute active pour la transaction.
+
+        Args:
+            transaction_id (int): L'ID de la transaction à annuler.
+        """
+
         try:
             await self._event_manager.cancel(transaction_id)
         except Exception as e:
@@ -691,7 +764,21 @@ class FedapayConnector:
             )
 
     async def shutdown_cleanup(self):
-        """Nettoie proprement les ressources"""
+        """
+        Nettoie proprement les ressources avant l'arrêt.
+
+        Effectue dans l'ordre:
+        1. Annulation de tous les futures en attente
+        2. Attente des callbacks en cours d'exécution avec timeout
+        3. Arrêt du serveur webhook si actif
+
+        Raises:
+            Exception: Une erreur durant le nettoyage
+            Toute exception est capturée et loggée
+
+        Note:
+            Cette méthode doit être appelée avant l'arrêt de l'application
+        """
         async with self._cleanup_lock:
             try:
                 # D'abord annuler tous les futures
