@@ -17,7 +17,13 @@ Vous devriez avoir reçu une copie de la GNU Affero General Public License
 avec ce programme. Si ce n'est pas le cas, consultez <https://www.gnu.org/licenses/>.
 """
 
-from .enums import EventFutureStatus, TypesPaiement
+from .exceptions import ConfigError
+from .enums import (
+    EventFutureStatus,
+    TypesPaiement,
+    TransactionStatus,
+    ExceptionOnProcessReloadBehavior,
+)
 from .event import FedapayEvent
 from .models import (
     FedapayStatus,
@@ -29,12 +35,18 @@ from .models import (
     InitTransaction,
     FedapayPay,
     GetToken,
+    ListeningProcessData,
+    Transaction,
 )
-from .utils import initialize_logger, get_currency
-from .types import WebhookCallback, PaymentCallback
+from .utils import initialize_logger, get_currency, validate_callback
+from .types import (
+    OnPersistedProcessReloadFinishedCallback,
+    WebhookCallback,
+    PaymentCallback,
+)
 from .server import WebhookServer
 from typing import Optional
-import os, asyncio, aiohttp, inspect  # noqa: E401
+import os, asyncio, aiohttp  # noqa: E401
 
 
 class FedapayConnector:
@@ -54,15 +66,16 @@ class FedapayConnector:
 
     def __init__(
         self,
-        fedapay_api_url: Optional[str] = os.getenv("API_URL"),
+        fedapay_api_url: Optional[str] = os.getenv("FEDAPAY_API_URL"),
         use_listen_server: Optional[bool] = False,
         listen_server_endpoint_name: Optional[str] = os.getenv(
-            "ENDPOINT_NAME", "webhooks"
+            "FEDAPAY_ENDPOINT_NAME", "webhooks"
         ),
         listen_server_port: Optional[int] = 3000,
         fedapay_webhooks_secret_key: Optional[str] = os.getenv("FEDAPAY_AUTH_KEY"),
         print_log_to_console: Optional[bool] = False,
         save_log_to_file: Optional[bool] = True,
+        callback_timeout: Optional[float] = 10,
     ):
         if self._init is False:
             self._logger = initialize_logger(print_log_to_console, save_log_to_file)
@@ -70,7 +83,15 @@ class FedapayConnector:
             self.fedapay_api_url = fedapay_api_url
             self.listen_server_port = listen_server_port
             self.listen_server_endpoint_name = listen_server_endpoint_name
-            self._event_manager: FedapayEvent = FedapayEvent(self._logger)
+            self._event_manager: FedapayEvent = FedapayEvent(
+                self._logger, 5, ExceptionOnProcessReloadBehavior.KEEP_AND_RETRY
+            )
+            self._event_manager.set_run_at_persisted_process_reload_callback(
+                callback=self._run_on_reload_callback
+            )
+            self._event_manager.set_run_before_timeout_callback(
+                callback=self._run_on_transaction_timeout_callback
+            )
             self._payment_callback: PaymentCallback = None
             self._webhooks_callback: WebhookCallback = None
             self.accepted_transaction = [
@@ -88,7 +109,40 @@ class FedapayConnector:
                     fedapay_auth_key=fedapay_webhooks_secret_key,
                 )
 
+            self._on_reload_finished_callback: Optional[
+                OnPersistedProcessReloadFinishedCallback
+            ] = None
+            self._callback_lock = asyncio.Lock()
+            self._cleanup_lock = asyncio.Lock()
+            self._callback_tasks = set()
+            self.callback_timeout = callback_timeout
+
             self._init = True
+
+    def set_on_persited_listening_processes_loading_finished_callback(
+        self, callback: OnPersistedProcessReloadFinishedCallback
+    ):
+        validate_callback(
+            callback,
+            {
+                "future_event_status": EventFutureStatus,
+                "data": list[WebhookTransaction] | None,
+            },
+            "persited_listening_processes_loading_finished callback",
+        )
+        if callback:
+            self._on_reload_finished_callback = callback
+
+    async def load_persisted_listening_processes(self):
+        """
+        Doit être appelé explicitement au démarrage de l'application si
+        vous souhaitez rétablir les potentielles écoutes perdues lors du dernier redémarrage de l'application
+        """
+        if not self._on_reload_finished_callback:
+            raise ConfigError(
+                "Callback not set - Call 'set_on_persited_listening_processes_loading_finished_callback' before to set it and retry"
+            )
+        await self._event_manager.load_persisted_processes()
 
     async def _init_transaction(
         self,
@@ -280,23 +334,117 @@ class FedapayConnector:
         )
 
     async def _await_external_event(self, id_transaction: int, timeout_return: int):
-        self._logger.info(
-            f"Attente d'un événement externe pour la transaction ID: {id_transaction}"
-        )
-        future = self._event_manager.create_future(
-            id_transaction=id_transaction, timeout=timeout_return
-        )
-        result: EventFutureStatus = await asyncio.wait_for(future, None)
-        data = self._event_manager.get_event_data(id_transaction=id_transaction)
-        return result, data
+        try:
+            self._logger.info(
+                f"Attente d'un événement externe pour la transaction ID: {id_transaction}"
+            )
+            future = await self._event_manager.create_future(
+                id_transaction=id_transaction, timeout=timeout_return
+            )
+            result: EventFutureStatus = await asyncio.wait_for(future, None)
+            data = self._event_manager.pop_event_data(id_transaction=id_transaction)
+            return result, data
+        except asyncio.CancelledError:
+            self._logger.info(
+                f"Annulation de l'attente pour la transaction {id_transaction} -- arret normal"
+            )
+            await self._event_manager.cancel(id_transaction)
+            return EventFutureStatus.CANCELLED, None
+        except Exception as e:
+            self._logger.error(
+                f"Erreur dans le callback de rechargement : {e}", stack_info=True
+            )
+            raise e
+
+    async def _run_on_reload_callback(self, data: ListeningProcessData):
+        try:
+            status = await self._check_status(id_transaction=data.id_transaction)
+            if (
+                status.status == TransactionStatus.created
+                or status.status == TransactionStatus.pending
+            ):
+                # on remet l'écoute en place et on attend le timeout ou une notification de fedapay
+
+                self._logger.info(
+                    f"Attente d'un événement externe pour la transaction ID: {data.id_transaction}"
+                )
+                future = await self._event_manager.reload_future(
+                    process_data=data, timeout=600
+                )
+                result: EventFutureStatus = await asyncio.wait_for(future, None)
+                event_data = self._event_manager.pop_event_data(
+                    id_transaction=data.id_transaction
+                )
+            else:
+                result = EventFutureStatus.RESOLVED
+                event_data = [
+                    # on aura pas un model complet avec les données fournies par fedapay
+                    # mais les information contenues dans le model partiel devraient etre suffisantes pour tout traitement plus tard.
+                    WebhookTransaction(
+                        name=f"transaction.{status.status.value}",
+                        entity=Transaction(
+                            id=data.id_transaction,
+                            status=status.status,
+                            fees=status.frais,
+                            commission=status.fedapay_commission,
+                        ),
+                    )
+                ]
+
+            await self._on_reload_finished_callback(result, event_data)
+
+        except asyncio.CancelledError:
+            self._logger.info(
+                f"Annulation de l'attente pour la transaction {data.id_transaction} -- arret normal"
+            )
+            await self._event_manager.cancel(data.id_transaction)
+            return EventFutureStatus.CANCELLED, None
+
+        except Exception as e:
+            self._logger.error(
+                f"Erreur dans le callback de rechargement : {e}", stack_info=True
+            )
+            raise e
+
+    async def _run_on_transaction_timeout_callback(self, id_transaction: int):
+        status = await self._check_status(id_transaction=id_transaction)
+        if (
+            status.status == TransactionStatus.created
+            or status.status == TransactionStatus.pending
+        ):
+            # idéalement faire un appel a fedapay pour cloturer la transaction puis timeout en interne
+            # pour que si la page de aiement est tjr dispo dans un client elle ne puisse plus traiter un paiment pour etre
+            # sûr de ne pas recevoir un paiement intraçable et innatendu
+            # pas encore trouver une methode pour invalider ou cancel le paiment userside à part la supression complete
+            # que je ne trouve pas super interessant donc on va attendre simplement
+            # que la transaction tombe en expiration automatiquement coté fedapay
+            return True
+        else:
+            # au lieu de timeout on resolve parce que suite a un pb ou un autre on a pas recu la notif de fedapay pour l'event
+            # ainsi on va peut etre attendre tout le temps du timeout avant de resolve mais au aura quand meme resolve tard au lieu de jamais
+            # systeme mis en place pour lisser les delais de reponse de fedapay ou les pannes empechant l'envois de notifications d'event.
+            await self._event_manager.set_event_data(
+                WebhookTransaction(
+                    name=f"transaction.{status.status.value}",
+                    entity=Transaction(
+                        id=id_transaction,
+                        status=status.status,
+                        fees=status.frais,
+                        commission=status.fedapay_commission,
+                    ),
+                )
+            )
+            return False
 
     def _handle_payment_callback_exception(self, task: asyncio.Task):
         try:
             task.result()
         except Exception as e:
-            self._logger.debug(
+            self._logger.error(
                 f"Erreur dans le payment_callback : {e}", stack_info=True
             )
+        finally:
+            self._callback_tasks.discard(task)
 
     def _handle_webhook_callback_exception(self, task: asyncio.Task):
         try:
@@ -305,6 +453,8 @@ class FedapayConnector:
             self._logger.debug(
                 f"Erreur dans le webhook_callback : {e}", stack_info=True
             )
+        finally:
+            self._callback_tasks.discard(task)
 
     def start_webhook_server(self):
         """
@@ -317,10 +467,10 @@ class FedapayConnector:
             self.webhook_server.start_webhook_listenning(self._webhooks_callback)
         else:
             self._logger.warning(
-                "L'instance Fedapay connectore n'est pas configurée pour utiliser cette methode, passer l'argument use_listen_server a True "
+                "L'instance Fedapay connector n'est pas configurée pour utiliser cette methode, passer l'argument use_listen_server a True "
             )
 
-    def fedapay_save_webhook_data(self, event_dict: dict):
+    async def fedapay_save_webhook_data(self, event_dict: dict):
         """
         Méthode à utiliser dans un endpoint de l'API configuré pour recevoir les events webhook de Fedapay.
         Enregistre les données du webhook Fedapay pour une transaction donnée.
@@ -330,7 +480,7 @@ class FedapayConnector:
         Vous pouvez créer un endpoint similaire pour exploiter cette methode de maniere personnalisée avec FastAPI
 
         @router.post(
-            f"{os.getenv('ENDPOINT_NAME', 'webhooks')}", status_code=status.HTTP_200_OK
+            f"{os.getenv('FEDAPAY_ENDPOINT_NAME', 'webhooks')}", status_code=status.HTTP_200_OK
         )
         async def receive_webhooks(request: Request):
             header = request.headers
@@ -364,19 +514,24 @@ class FedapayConnector:
             return
 
         self._logger.info(f"Enregistrement des données du webhook: {event_model.name}")
-        is_set = self._event_manager.set_event_data(event_model)
+
+        is_set = await self._event_manager.set_event_data(event_model)
 
         if self._webhooks_callback and is_set:
-            self._logger.info("Appel de la fonction de rappel personnalisée")
-            try:
-                task = asyncio.create_task(
-                    self._webhooks_callback(WebhookHistory(**event_model.model_dump()))
-                )
-                task.add_done_callback(self._handle_webhook_callback_exception)
-            except Exception as e:
-                self._logger(
-                    f"Exception Capturer au lancement du _webhooks_callback : {str(e)}"
-                )
+            async with self._callback_lock:
+                self._logger.info("Appel de la fonction de rappel personnalisée")
+                try:
+                    task = asyncio.create_task(
+                        self._webhooks_callback(
+                            WebhookHistory(**event_model.model_dump())
+                        )
+                    )
+                    self._callback_tasks.add(task)
+                    task.add_done_callback(self._handle_webhook_callback_exception)
+                except Exception as e:
+                    self._logger.error(
+                        f"Exception Capturer au lancement du _webhooks_callback : {str(e)}"
+                    )
 
     async def fedapay_pay(
         self,
@@ -445,8 +600,9 @@ class FedapayConnector:
                     self._payment_callback(PaymentHistory(**result.model_dump()))
                 )
                 task.add_done_callback(self._handle_payment_callback_exception)
+                self._callback_tasks.add(task)
             except Exception as e:
-                self._logger(
+                self._logger.error(
                     f"Exception Capturer au lancement du _payment_callback : {str(e)}"
                 )
 
@@ -502,49 +658,72 @@ class FedapayConnector:
         self._logger.info(f"Transaction finalisée: {future_event_result}")
         return future_event_result, data
 
-    def fedapay_cancel_finalisation_waiting(self, id_transaction: int):
-        return self._event_manager.cancel(id_transaction=id_transaction)
+    async def fedapay_cancel_finalisation_waiting(self, id_transaction: int):
+        return await self._event_manager.cancel(id_transaction=id_transaction)
 
     def set_payment_callback_function(self, callback_function: PaymentCallback):
-        if not callable(callback_function):
-            raise TypeError("Callback function must be a callable")
-        if not inspect.iscoroutinefunction(callback_function):
-            raise TypeError("Callback function must be a async function")
-        sig = inspect.signature(callback_function)
-        params = list(sig.parameters.values())
-        if len(params) != 1 or params[0].annotation != PaymentHistory:
-            raise TypeError(
-                "Callback function must take only one argument of type PaymentHistory"
-            )
-
+        validate_callback(
+            callback_function, {"payment": PaymentHistory}, "Payment callback"
+        )
         self._payment_callback = callback_function
 
     def set_webhook_callback_function(self, callback_function: WebhookCallback):
-        if not callable(callback_function):
-            raise TypeError("Callback function must be a callable")
-        if not inspect.iscoroutinefunction(callback_function):
-            raise TypeError("Callback function must be a async function")
-        sig = inspect.signature(callback_function)
-        params = list(sig.parameters.values())
-        if len(params) != 1 or params[0].annotation != WebhookHistory:
-            raise TypeError(
-                "Callback function must take only one argument of type WebhookHistory"
-            )
+        validate_callback(
+            callback_function, {"webhook_data": WebhookHistory}, "Webhook callback"
+        )
 
         self._webhooks_callback = callback_function
 
-    def cancel_all_future_event(self, reason: Optional[str] = None):
+    async def cancel_all_future_event(self, reason: Optional[str] = None):
         try:
-            self._event_manager.cancel_all(reason)
+            await self._event_manager.cancel_all(reason)
         except Exception as e:
             self._logger.error(
                 f"Exception occurs cancelling all futures -- error : {e}"
             )
 
-    def cancel_future_event(self, transaction_id: int):
+    async def cancel_future_event(self, transaction_id: int):
         try:
-            self._event_manager.cancel(transaction_id)
+            await self._event_manager.cancel(transaction_id)
         except Exception as e:
             self._logger.error(
                 f"Exception occurs cancelling future for transaction : {transaction_id} -- error : {e}"
             )
+
+    async def shutdown_cleanup(self):
+        """Nettoie proprement les ressources"""
+        async with self._cleanup_lock:
+            try:
+                # D'abord annuler tous les futures
+                await self.cancel_all_future_event("Application shutdown")
+
+                # Attendre les callbacks avec timeout
+                if self._callback_tasks:
+                    pending = list(self._callback_tasks)
+                    self._logger.info(f"Attente de {len(pending)} tâches de callback")
+                    try:
+                        await asyncio.wait_for(
+                            asyncio.gather(*pending, return_exceptions=True),
+                            timeout=self.callback_timeout,
+                        )
+                    except asyncio.TimeoutError:
+                        self._logger.warning("Timeout pendant l'attente des callbacks")
+                    finally:
+                        # Annuler les tâches restantes
+                        for task in pending:
+                            if not task.done():
+                                task.cancel()
+                        self._callback_tasks.clear()
+
+                # Arrêter le serveur webhook en dernier
+                if self.use_internal_listener:
+                    self._logger.info("Arrêt du serveur webhook interne")
+                    try:
+                        self.webhook_server.stop_webhook_listenning()
+                    except Exception as e:
+                        self._logger.error(
+                            f"Erreur lors de l'arrêt du serveur webhook: {e}"
+                        )
+
+            except Exception as e:
+                self._logger.error(f"Erreur pendant le nettoyage: {e}", exc_info=True)

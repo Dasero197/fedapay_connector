@@ -1,5 +1,6 @@
 from enum import Enum
 
+
 class Pays(str, Enum):
     benin = "bj"
     cote_d_ivoire = "ci"
@@ -10,9 +11,11 @@ class Pays(str, Enum):
     mali = "ml"
     burkina_faso = "bf"
 
+
 class Monnaies(str, Enum):
     xof = "XOF"
     gnf = "GNF"
+
 
 class MethodesPaiement(str, Enum):
     mtn_open = "MTN Mobile Money Bénin"
@@ -25,6 +28,7 @@ class MethodesPaiement(str, Enum):
     airtel_ne = "Airtel Niger"
     mtn_open_gn = "MTN Mobile Money Guinée"
 
+
 class TransactionStatus(str, Enum):
     created = "created"
     pending = "pending"
@@ -33,11 +37,18 @@ class TransactionStatus(str, Enum):
     declined = "declined"
     deleted = "deleted"
 
+
 class EventFutureStatus(str, Enum):
     CANCELLED = "cancelled"
     TIMEOUT = "timeout"
     RESOLVED = "resolved"
 
+
 class TypesPaiement(str, Enum):
     AVEC_REDIRECTION = "avec_redirection"
     SANS_REDIRECTION = "sans_redirection"
+
+class ExceptionOnProcessReloadBehavior(str, Enum):
+    DROP_AND_REMOVE_PERSISTANCE = "drop_and_remove_persistence"
+    DROP_AND_KEEP_PERSISTED = "drop_and_keep_persisted"
+    KEEP_AND_RETRY = "keep_and_retry"

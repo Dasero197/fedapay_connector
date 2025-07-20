@@ -5,3 +5,4 @@
 /fedapay_connector.egg-info
 /__pycache__
 /venv
+/fedapay_connector_persisted_data
