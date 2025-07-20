@@ -93,6 +93,9 @@ class FedapayConnector:
         print_log_to_console: Optional[bool] = False,
         save_log_to_file: Optional[bool] = True,
         callback_timeout: Optional[float] = 10,
+        db_url: Optional[str] = os.getenv(
+            "FEDAPAY_DB_URL", "sqlite:///fedapay_connector_persisted_data/processes.db"
+        ),
     ):
         if self._init is False:
             self._logger = initialize_logger(print_log_to_console, save_log_to_file)
@@ -100,8 +103,19 @@ class FedapayConnector:
             self.fedapay_api_url = fedapay_api_url
             self.listen_server_port = listen_server_port
             self.listen_server_endpoint_name = listen_server_endpoint_name
+            self.accepted_transaction = [
+                "transaction.canceled",
+                "transaction.declined",
+                "transaction.approved",
+                "transaction.deleted",
+                "transaction.expired",
+            ]
             self._event_manager: FedapayEvent = FedapayEvent(
-                self._logger, 5, ExceptionOnProcessReloadBehavior.KEEP_AND_RETRY
+                self._logger,
+                5,
+                ExceptionOnProcessReloadBehavior.KEEP_AND_RETRY,
+                self.accepted_transaction,
+                db_url=db_url,
             )
             self._event_manager.set_run_at_persisted_process_reload_callback(
                 callback=self._run_on_reload_callback
@@ -111,13 +125,6 @@ class FedapayConnector:
             )
             self._payment_callback: PaymentCallback = None
             self._webhooks_callback: WebhookCallback = None
-            self.accepted_transaction = [
-                "transaction.canceled",
-                "transaction.declined",
-                "transaction.approved",
-                "transaction.deleted",
-                "transaction.expired",
-            ]
 
             if use_listen_server is True:
                 self.webhook_server = WebhookServer(

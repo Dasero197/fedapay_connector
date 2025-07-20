@@ -44,7 +44,7 @@ poetry add fedapay_connector
 | `FEDAPAY_API_URL` | URL API (sandbox/production) | ✅ | - |
 | `FEDAPAY_AUTH_KEY` | Clé secrète webhook | ✅ | - |
 | `FEDAPAY_ENDPOINT_NAME` | Endpoint webhook | ❌ | `webhooks` |
-| `FEDAPAY_DB_URL` | URL sqlalchemy base de données  | ❌ | `sqlite:///processes.db` |
+| `FEDAPAY_DB_URL` | URL sqlalchemy base de données  | ❌ | `sqlite:///fedapay_connector_persisted_data/processes.db` |
 
 ### Exemple de .env
 ```env
@@ -312,7 +312,7 @@ async def lifespan(app: FastAPI):
     yield
 
     #permet un arret propre de fedapay connector
-    fedapay.shutdown_cleanup()
+    await fedapay.shutdown_cleanup()
 
 app = FastAPI(lifespan=lifespan)
 
