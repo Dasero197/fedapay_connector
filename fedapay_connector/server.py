@@ -3,7 +3,6 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request, status
 from typing import Optional
 import os, logging, uvicorn, threading  # noqa: E401
-from .types import WebhookCallback
 from .utils import verify_signature
 
 
@@ -67,10 +66,8 @@ class WebhookServer:
             await asyncio.sleep(0.1)
         await self._shutdown_webhook_server()
 
-    def _setup_routes(self, function_callback: Optional[WebhookCallback] = None):
+    def _setup_routes(self):
         from .connector import FedapayConnector
-
-        fd = FedapayConnector()
 
         @self.app.post(f"/{self.endpoint}", status_code=status.HTTP_200_OK)
         async def receive_webhooks(request: Request):
@@ -88,20 +85,17 @@ class WebhookServer:
             )
 
             event = await request.json()
-            await fd.fedapay_save_webhook_data(event)
+            await FedapayConnector().fedapay_save_webhook_data(event)
 
             return {"ok"}
 
-    def _start_webhook_server(
-        self, function_callback: Optional[WebhookCallback] = None
-    ):
-        self._setup_routes(function_callback)
+    def _start_webhook_server(self):
+        self._setup_routes()
         config = uvicorn.Config(
             app=self.app, host="localhost", port=self.port, log_level="info"
         )
         self.server = uvicorn.Server(config)
-        # self.server.force_exit = True
-        # on laisse fastapi faire son arret normal et return
+
         try:
             self.logger.info(
                 f"Webhook server is starting at {self.endpoint}:{self.port}"
@@ -128,9 +122,7 @@ class WebhookServer:
             await self.server.shutdown()
             self.shutdown_complete_event.set()
 
-    def start_webhook_listenning(
-        self, function_callback: Optional[WebhookCallback] = None
-    ):
+    def start_webhook_listenning(self):
         """
         Start the webhook server to listen for incoming requests.
         """
@@ -140,7 +132,7 @@ class WebhookServer:
 
         try:
             self.server_thread = threading.Thread(
-                target=self._start_webhook_server, args=[function_callback], daemon=True
+                target=self._start_webhook_server, daemon=True
             )
             self.server_thread.start()
             self.logger.info("Webhook server thread started.")

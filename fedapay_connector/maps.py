@@ -4,24 +4,15 @@ Paiement_Map = {
     Pays.benin: {
         MethodesPaiement.mtn_open,
         MethodesPaiement.moov,
-        MethodesPaiement.sbin
+        MethodesPaiement.sbin,
     },
     Pays.cote_d_ivoire: {
         MethodesPaiement.mtn_ci,
     },
-    Pays.niger: {
-        MethodesPaiement.airtel_ne
-    },
-    Pays.senegal: {
-        MethodesPaiement.free_sn
-    },
-    Pays.togo: {
-        MethodesPaiement.moov_tg,
-        MethodesPaiement.togocel
-    },
-    Pays.guinee: {
-        MethodesPaiement.mtn_open_gn
-    },
+    Pays.niger: {MethodesPaiement.airtel_ne},
+    Pays.senegal: {MethodesPaiement.free_sn},
+    Pays.togo: {MethodesPaiement.moov_tg, MethodesPaiement.togocel},
+    Pays.guinee: {MethodesPaiement.mtn_open_gn},
 }
 
 
@@ -33,4 +24,3 @@ Monnaies_Map = {
     Pays.senegal: Monnaies.xof,
     Pays.togo: Monnaies.xof,
 }
-

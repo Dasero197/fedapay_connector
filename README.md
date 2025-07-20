@@ -1,6 +1,20 @@
 # FedaPay Connector
 
-FedaPay Connector est un client asynchrone Singleton avancé, conçu pour interagir avec l'API FedaPayoffrant une gestion automatisée des paiements et des webhooks avec persistence des événements.
+![PyPI version](https://img.shields.io/pypi/v/fedapay_connector)
+![Python versions](https://img.shields.io/pypi/pyversions/fedapay_connector)
+![License](https://img.shields.io/pypi/l/fedapay_connector)
+![Downloads](https://img.shields.io/pypi/dm/fedapay_connector)
+
+Un client asynchrone robuste pour l'API FedaPay, offrant une gestion automatisée des paiements avec support complet des webhooks.
+
+## ✨ Caractéristiques
+
+- 🔄 **Pattern Singleton** - Une seule instance partagée dans toute l'application
+- ⚡ **Entièrement Asynchrone** - Performances optimales avec asyncio
+- 🔒 **Sécurisé** - Validation des signatures et gestion sécurisée des webhooks
+- 💾 **Persistence Automatique** - Sauvegarde et restauration des transactions
+- 🎯 **Callbacks Personnalisables** - Hooks pour tous les événements
+- 🚀 **Simple à Utiliser** - API intuitive et documentation complète
 
 ## Installation
 
@@ -14,20 +28,23 @@ pip install fedapay_connector
 poetry add fedapay_connector
 ```
 
-## Configuration
+## 🛠️ Configuration
+
+### Prérequis
+
+- Python 3.9+
+- Un compte FedaPay avec les clés API
+- Pour le serveur webhook : une URL accessible publiquement
 
 ### Variables d'Environnement
 
-```bash
-# Requis
-FEDAPAY_API_KEY="votre_cle_api"               # Clé API FedaPay
-FEDAPAY_API_URL="url_api"                     # URL API (sandbox/production)
-FEDAPAY_AUTH_KEY="webhook_secret"             # Clé secrète webhook
-
-# Optionnel
-FEDAPAY_ENDPOINT_NAME="webhooks"              # Endpoint webhook (défaut: webhooks)
-FEDAPAY_DB_URL="sqlite:///processes.db"       # URL base de données (défaut: SQLite)
-```
+| Variable | Description | Requis | Défaut |
+|----------|-------------|--------|---------|
+| `FEDAPAY_API_KEY` | Clé API FedaPay | ✅ | - |
+| `FEDAPAY_API_URL` | URL API (sandbox/production) | ✅ | - |
+| `FEDAPAY_AUTH_KEY` | Clé secrète webhook | ✅ | - |
+| `FEDAPAY_ENDPOINT_NAME` | Endpoint webhook | ❌ | `webhooks` |
+| `FEDAPAY_DB_URL` | URL sqlalchemy base de données  | ❌ | `sqlite:///processes.db` |
 
 ### Exemple de .env
 ```env
@@ -37,9 +54,77 @@ FEDAPAY_AUTH_KEY=webhook_secret_123456789
 FEDAPAY_ENDPOINT_NAME=webhooks
 ```
 
-## Utilisation
+## 📚 Guide d'Utilisation
 
-### 1. Paiement Simple
+### Modes d'Utilisation
+
+1. **Mode Simple** (non recommandé)
+   - Polling manuel du statut
+   - Sans gestion des webhooks
+
+2. **Mode Serveur Intégré** (recommandé)
+   - Serveur webhook intégré
+   - Gestion automatique des événements
+   - Parfait pour une apllication python hors context d'API
+
+3. **Mode Serveur Intégré (options avancées)** (recommandé)
+   - Serveur webhook intégré
+   - Gestion automatique des événements
+   - Sauvegarde et restauration automatique des processus découtes apres arrêt ou redemarrage de l'app
+   - Parfait pour une apllication python hors context d'API
+
+4. **Mode API Existante** 
+   - Intégration avec FastAPI/Django/etc
+   - Gestion personnalisée des webhooks
+
+### 1. Mode Simple 
+
+```python
+from fedapay_connector import Pays, MethodesPaiement, FedapayConnector, PaiementSetup, UserData, EventFutureStatus, PaymentHistory, WebhookHistory
+import asyncio
+
+async def main():
+    # Creation de l'instance Fedapay Connector
+    fedapay = FedapayConnector(use_listen_server= False) 
+
+    # Configuration paiement
+    setup = PaiementSetup(
+        pays=Pays.benin,
+        method=MethodesPaiement.mtn_open
+    )
+    
+    client = UserData(
+        nom="Doe",
+        prenom="John",
+        email="john@example.com",
+        tel="0162626262"
+    )
+
+    # Exécution paiement
+    resp = await fedapay.fedapay_pay(
+        setup=setup,
+        client_infos=client,
+        montant_paiement=1000,
+        payment_contact="0162626262"
+    )
+
+    while True:
+    # vérifier le resultat manuellement par polling
+    status = await fedapay.fedapay_check_transaction_status(resp.id_transaction)
+    if status.status == TransactionStatus.created or status.status == TransactionStatus.pending:
+        await asyncio.sleep(0.1)
+    else:
+        break
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+### 2. Mode Serveur Intégré
+
+Cette option nécéssite que vous ayez un reverse proxy pointant sur votre machine au port d'ecoute configurer pour le serveur
+(défaut : 3000) depuis une url qui sera utiliseée pour la configuration des webhook sur votre panel fedapay. 
+[lien doc fedapay](https://docs.fedapay.com/integration-api/fr/webhooks-fr)
 
 ```python
 from fedapay_connector import Pays, MethodesPaiement, FedapayConnector, PaiementSetup, UserData, EventFutureStatus, PaymentHistory, WebhookHistory
@@ -62,10 +147,6 @@ async def main():
     # Configuration des callbacks
     fedapay.set_payment_callback_function(payment_callback) # executer a chaques appels reussi a fedapay_pay()
     fedapay.set_webhook_callback_function(webhook_callback) # executer à la réception de webhooks fedapay valides
-    fedapay.set_on_persited_listening_processes_loading_finished_callback(run_after_finalise) # éxectuer lors de la récupération des ecoutes d'event fedapay perduent lors d'un potentiel redemarrage de l'app pendant que des ecoutes sont actives.
-
-    # lancement de la restauration des processus d'écoute
-    await fedapay.load_persisted_listening_processes()
 
     # Démarrage du listener interne
     fedapay.start_webhook_server()
@@ -104,7 +185,7 @@ async def main():
         # Il faudra implementer par la suite votre gestion des webhook pour la validation ou tout autre traitement du paiement effectuer à partir de la liste d'objet WebhookTransaction reçu.
 
     elif status == EventFutureStatus.TIMEOUT:
-        # La vérification manuelle du statut de la transaction se fait automatiquement si timeout donc si timeout est levé pas besoin de revérifier manuellement le status sur le coup.
+        # La vérification manuelle du statut de la transaction se fait automatiquement si timeout donc si timeout est levé pas besoin de revérifier manuellement le status.
 
         print("\nLa transaction a expiré.\n")
 
@@ -116,7 +197,93 @@ if __name__ == "__main__":
     asyncio.run(main())
 ```
 
-### 2. Intégration FastAPI ou framework similaire
+
+### 3. Mode Serveur Intégré (options avancées)
+
+```python
+from fedapay_connector import Pays, MethodesPaiement, FedapayConnector, PaiementSetup, UserData, EventFutureStatus, PaymentHistory, WebhookHistory
+import asyncio
+
+async def main():
+
+    # Creation des callbacks
+    async def payment_callback(data:PaymentHistory):
+        # s'execute chaque fois qu'un nouveau paiement est initialisé avec fedapay_pay()
+            print(f"Callback de paiement reçu : {data.__dict__}")
+
+    async def webhook_callback(data:WebhookHistory):
+        # s'execute chaque fois qu'un nouveau webhook est reçu de fedapay
+        print(f"Webhook reçu : {data.__dict__}")
+    
+    async def run_after_finalise(
+        status: EventFutureStatus, data: list[WebhookHistory] | None
+    ):
+        # s'execute après la récupération d'écoute perdue une fois que la reponse de fedapay est reçue
+        # ou que le timeout naturel survient
+        if status == EventFutureStatus.RESOLVED:
+            print("\nTransaction réussie\n")
+            print(f"\nDonnées finales : {data}\n")
+
+            # ATTENTION :  Ce cas indique le reception d'une webhook valide et la clôture de la transaction mais ne veut pas systématiquement dire due l'opération à été approuvée
+
+            # Il faudra implementer par la suite votre gestion des webhook pour la validation ou tout autre traitement du paiement effectuer à partir de la liste d'objet WebhookTransaction reçu.
+
+        elif status == EventFutureStatus.TIMEOUT:
+            # La vérification manuelle du statut de la transaction se fait automatiquement si timeout donc si timeout est levé pas besoin de revérifier manuellement le status sur le coup.
+
+            print("\nLa transaction a expiré.\n")
+
+        elif status == EventFutureStatus.CANCELLED:
+            print("\nTransaction annulée par l'utilisateur\n")
+
+    # Creation de l'instance Fedapay Connector
+    fedapay = FedapayConnector(use_listen_server= True) 
+
+    # Configuration des callbacks
+    fedapay.set_payment_callback_function(payment_callback) # executer a chaques appels reussi a fedapay_pay()
+    fedapay.set_webhook_callback_function(webhook_callback) # executer à la réception de webhooks fedapay valides
+    fedapay.set_on_persited_listening_processes_loading_finished_callback(run_after_finalise) 
+    # éxectuer lors de la récupération des ecoutes d'event fedapay perduent lors d'un potentiel 
+    # redemarrage de l'app pendant que des ecoutes sont actives.
+
+    # lancement de la restauration des processus d'écoute
+    await fedapay.load_persisted_listening_processes()
+
+    # Démarrage du listener interne
+    fedapay.start_webhook_server()
+
+    # Configuration paiement
+    setup = PaiementSetup(
+        pays=Pays.benin,
+        method=MethodesPaiement.mtn_open
+    )
+    
+    client = UserData(
+        nom="Doe",
+        prenom="John",
+        email="john@example.com",
+        tel="0162626262"
+    )
+
+    # Exécution paiement
+    resp = await fedapay.fedapay_pay(
+        setup=setup,
+        client_infos=client,
+        montant_paiement=1000,
+        payment_contact="0162626262"
+    )
+
+    # Attente résultat
+    status, webhooks = await fedapay.fedapay_finalise(resp.id_transaction)
+
+    await run_after_finalise(status, webhooks)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+### 4. Mode API Existante (Intégration FastAPI ou framework similaire)
 
 Dans des cas d'usage comme pour un backend FastAPI vous devrez faire l'initialisation du module dans le lifespan au demarrage de FastAPI puis l'utiliser directement dans vos logiques métiers pour le traitement des transaction.
 
@@ -199,8 +366,24 @@ async def on_webhook(webhook: WebhookHistory):
     """Appelé pour chaque webhook"""
     print(f"Webhook reçu: {webhook.name}")
 
+async def run_after_finalise(
+    status: EventFutureStatus, data: list[WebhookHistory] | None
+):
+    """Appelé après la résolution d'écoutes récupérées """
+    
+    if status == EventFutureStatus.RESOLVED:
+        print("\nTransaction réussie\n")
+        print(f"\nDonnées finales : {data}\n")
+
+    elif status == EventFutureStatus.TIMEOUT:
+        print("\nLa transaction a expiré.\n")
+
+    elif status == EventFutureStatus.CANCELLED:
+        print("\nTransaction annulée par l'utilisateur\n")
+
 fedapay.set_payment_callback_function(on_payment)
 fedapay.set_webhook_callback_function(on_webhook)
+fedapay.set_on_persited_listening_processes_loading_finished_callback(run_after_finalise)
 ```
 
 ### Persistence et Restauration
@@ -211,33 +394,30 @@ Le module gère automatiquement :
 - Reprise des écouteurs interrompus
 - Synchronisation avec FedaPay
 
-### Gestion des Erreurs
+## 🔧 Dépannage
 
-```python
-try:
-    status = await fedapay.fedapay_check_transaction_status(transaction_id)
-except FedapayAPIError as e:
-    print(f"Erreur API: {e}")
-except SignatureError as e:
-    print(f"Signature invalide: {e}")
-except TimeoutError as e:
-    print(f"Timeout: {e}")
-```
+### Problèmes Courants
 
-## Documentation Complète
+1. **Les webhooks ne sont pas reçus**
+   - Vérifier l'URL configurée dans FedaPay
+   - Vérifier la clé secrète webhook
 
-Pour une documentation détaillée incluant:
-- Guides avancés
-- Référence API complète
-- Exemples détaillés
-- Bonnes pratiques
-
-Visitez [la documentation complète](https://fedapay-connector.readthedocs.io/).
+2. **Erreurs de timeout**
+   - Augmenter la valeur du timeout
+   - Vérifier la connexion réseau
+   - Consulter les logs pour plus de détails
 
 ## Contribution
 
-Les contributions sont les bienvenues! Voir [CONTRIBUTING.md](CONTRIBUTING.md) pour les détails.
+Les contributions sont les bienvenues!
 
 ## Licence
 
 Ce projet est sous licence GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later). Consultez le fichier LICENSE pour plus d'informations.
+
+## 🔒 Sécurité
+
+- Ne jamais exposer les clés API
+- Toujours valider les signatures webhook
+- Utiliser HTTPS en production
+- Implémenter des timeouts appropriés

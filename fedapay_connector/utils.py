@@ -1,6 +1,6 @@
 import inspect
 import os, logging, hmac, hashlib, time  # noqa: E401
-from typing import Callable, Dict, Optional
+from typing import Callable, Optional
 from fastapi import HTTPException
 from logging.handlers import TimedRotatingFileHandler
 from .enums import Pays
@@ -55,7 +55,6 @@ def initialize_logger(
     logger.info("Logger initialisé avec succès.")
     return logger
 
-
 def get_currency(pays: Pays):
     """
     Fonction interne pour obtenir la devise du pays.
@@ -67,7 +66,6 @@ def get_currency(pays: Pays):
         str: Code ISO de la devise du pays.
     """
     return Monnaies_Map.get(pays).value
-
 
 def verify_signature(payload: bytes, sig_header: str, secret: str):
     # Extraire le timestamp et la signature depuis le header
@@ -94,51 +92,22 @@ def verify_signature(payload: bytes, sig_header: str, secret: str):
 
     return True
 
-
 def validate_callback(
-    callback: Callable, expected_params: Dict[str, type], name: str
+    callback: Callable, callback_name: str, must_be_async: Optional[bool] = True
 ) -> None:
     """
-    Valide un callback avec plusieurs paramètres.
+    Valide légèrement un callback.
 
     Args:
         callback: La fonction de callback à valider
-        expected_params: Dictionnaire des paramètres attendus {nom: type}
-        name: Nom du callback pour les messages d'erreur
+        callback_name: Nom du callback pour les messages d'erreur
+        must_be_async : Indique si le callback doit être une fonction asynchrone
     """
-    return
     if not callback:
-        raise ValueError(f"{name} callback cannot be None")
+        raise ValueError(f"{callback_name} callback cannot be None")
 
     if not callable(callback):
-        raise TypeError(f"{name} must be callable")
+        raise TypeError(f"{callback_name} must be callable")
 
-    if not inspect.iscoroutinefunction(callback):
-        raise TypeError(f"{name} must be an async function")
-
-    sig = inspect.signature(callback)
-    params = sig.parameters
-
-    # Vérifie que tous les paramètres attendus sont présents avec les bons types
-    for param_name, expected_type in expected_params.items():
-        if param_name not in params:
-            raise TypeError(f"{name} is missing required parameter '{param_name}'")
-
-        param = params[param_name]
-        if param.annotation == inspect.Parameter.empty:
-            raise TypeError(
-                f"Parameter '{param_name}' in {name} must have type annotation"
-            )
-
-        if param.annotation != expected_type:
-            raise TypeError(
-                f"Parameter '{param_name}' in {name} must be of type {expected_type.__name__}, "
-                f"got {param.annotation.__name__}"
-            )
-
-    # Vérifie qu'il n'y a pas de paramètres supplémentaires
-    unexpected_params = set(params.keys()) - set(expected_params.keys())
-    if unexpected_params:
-        raise TypeError(
-            f"{name} has unexpected parameters: {', '.join(unexpected_params)}"
-        )
+    if must_be_async and not inspect.iscoroutinefunction(callback):
+        raise TypeError(f"{callback_name} must be an async function")

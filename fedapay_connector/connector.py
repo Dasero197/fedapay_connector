@@ -116,6 +116,7 @@ class FedapayConnector:
                 "transaction.declined",
                 "transaction.approved",
                 "transaction.deleted",
+                "transaction.expired",
             ]
 
             if use_listen_server is True:
@@ -333,6 +334,10 @@ class FedapayConnector:
             future = await self._event_manager.create_future(
                 id_transaction=id_transaction, timeout=timeout_return
             )
+            await self._event_manager.resolve_if_final_event_already_received(
+                id_transaction
+            )
+
             result: EventFutureStatus = await asyncio.wait_for(future, None)
             data = self._event_manager.pop_event_data(id_transaction=id_transaction)
             return result, data
@@ -363,6 +368,11 @@ class FedapayConnector:
                 future = await self._event_manager.reload_future(
                     process_data=data, timeout=600
                 )
+
+                await self._event_manager.resolve_if_final_event_already_received(
+                    data.id_transaction
+                )
+
                 result: EventFutureStatus = await asyncio.wait_for(future, None)
                 event_data = self._event_manager.pop_event_data(
                     id_transaction=data.id_transaction
@@ -456,7 +466,7 @@ class FedapayConnector:
             self._logger.info(
                 f"Démarrage du serveur FastAPI interne sur le port: {self.listen_server_port} avec pour point de terminaison: {'/' + str(self.listen_server_endpoint_name)} pour écouter les webhooks de FedaPay."
             )
-            self.webhook_server.start_webhook_listenning(self._webhooks_callback)
+            self.webhook_server.start_webhook_listenning()
         else:
             self._logger.warning(
                 "L'instance Fedapay connector n'est pas configurée pour utiliser cette methode, passer l'argument use_listen_server a True "
@@ -697,10 +707,6 @@ class FedapayConnector:
         """
         validate_callback(
             callback,
-            {
-                "future_event_status": EventFutureStatus,
-                "data": list[WebhookTransaction] | None,
-            },
             "persited_listening_processes_loading_finished callback",
         )
         if callback:
@@ -722,18 +728,14 @@ class FedapayConnector:
         """
         le callback à appeler lorsqu'un nouveau paiement est initialisé (appel de fedapay_pay)
         """
-        validate_callback(
-            callback_function, {"payment": PaymentHistory}, "Payment callback"
-        )
+        validate_callback(callback_function, "Payment callback")
         self._payment_callback = callback_function
 
     def set_webhook_callback_function(self, callback_function: WebhookCallback):
         """
         Définit le callback à appeler lorsque le webhook valide est reçu.
         """
-        validate_callback(
-            callback_function, {"webhook_data": WebhookHistory}, "Webhook callback"
-        )
+        validate_callback(callback_function, "Webhook callback")
 
         self._webhooks_callback = callback_function
 

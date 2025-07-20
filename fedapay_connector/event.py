@@ -28,6 +28,7 @@ class FedapayEvent:
         logger: logging.Logger,
         max_reload_attempts: int,
         on_listening_reload_exception: ExceptionOnProcessReloadBehavior,
+        final_event_names: list[str],
         sleeping_before_retry_delay: Optional[float] = 5,
     ):
         if self._init is False:
@@ -48,7 +49,138 @@ class FedapayEvent:
             self.on_listening_reload_exception = on_listening_reload_exception
             self.retry_attempts = {}
             self.sleeping_before_retry_delay = sleeping_before_retry_delay
+            self.final_event_names = final_event_names
             self._init = True
+
+    async def _auto_cancel(self, id_transaction: int, timeout: float):
+        self._logger.info(
+            f"Auto-cancel for id_transaction '{id_transaction}' started with timeout {timeout}"
+        )
+        await asyncio.sleep(timeout)
+        if (
+            id_transaction in self._processing_results_futures
+            and not self._processing_results_futures[id_transaction].done()
+        ):
+            self._logger.info(
+                f"Auto-cancel for id_transaction '{id_transaction}' triggered"
+            )
+
+            if self._run_before_timeout_callback:
+                try:
+                    should_cancel = await self._run_before_timeout_callback(
+                        id_transaction
+                    )
+                    if not should_cancel:
+                        self._logger.info(
+                            f"Auto-cancel for id_transaction '{id_transaction}' skipped by callback"
+                        )
+                        return await self.resolve(id_transaction=id_transaction)
+                except Exception as e:
+                    self._logger.error(
+                        f"Error in run_before_timeout_callback for id_transaction '{id_transaction}': {e} -- timeouting by default"
+                    )
+                    pass
+
+            async with self._processing_results_futures_lock:
+                future = self._processing_results_futures.pop(id_transaction, None)
+            if future and not future.done():
+                self._asyncio_event_loop.call_soon_threadsafe(
+                    future.set_result, EventFutureStatus.TIMEOUT
+                )
+            self._event_persit_storage.delete_process(transaction_id=id_transaction)
+        else:
+            self._logger.info(
+                f"Future for id_transaction '{id_transaction}' already resolved or cancelled before timeout"
+            )
+        self._logger.info(
+            f"Auto-cancel for id_transaction '{id_transaction}' completed"
+        )
+
+    def _persisted_process_reload_callback_exception(self, task: asyncio.Task):
+        try:
+            task.result()
+
+        except Exception as e:
+            self._logger.debug(
+                f"Erreur dans le persisted_process_reload_callback : {e}",
+                stack_info=True,
+            )
+
+    async def _load_persisted_process(self, process: StoredListeningProcess):
+        if self._run_at_persisted_process_reload_callback:
+            try:
+                task = asyncio.create_task(
+                    self._run_at_persisted_process_reload_callback(
+                        ListeningProcessData.model_validate_json(
+                            process.StoredListeningProcess_process_data
+                        )
+                    )
+                )
+                task.add_done_callback(
+                    self._persisted_process_reload_callback_exception
+                )
+                # si la tache est créer le rôle de cette persistance est atteint donc la perisitance est supprimée
+                # si entre ce moment et le moment ou la tache est executée le backend est redemarrer ou arreté
+                # avant l'exec de reload_future, le process d'ecoute est definitivement perdu pace que la creation du future s'ocuppe
+                # elle meme de la persistance si necessaire et si la tache lancé ici peut ne pas aboutir a
+                # un reload_future en fonction de l'exec du callback
+
+                self._event_persit_storage.delete_process(
+                    transaction_id=process.StoredListeningProcess_transaction_id
+                )
+                self._logger.info(
+                    f"run_at_persisted_process_reload_callback for process {process.StoredListeningProcess_transaction_id} completed successfully"
+                )
+            except Exception as e:
+                self._logger.error(
+                    f"Error in run_at_persisted_process_reload_callback for process {process.StoredListeningProcess_transaction_id}: {e} -- loading failled"
+                )
+                if (
+                    self.on_listening_reload_exception
+                    == ExceptionOnProcessReloadBehavior.DROP_AND_REMOVE_PERSISTANCE
+                ):
+                    self._logger.error(
+                        f"Removing persisted process {process.StoredListeningProcess_transaction_id} due to reload exception"
+                    )
+                    self._event_persit_storage.delete_process(
+                        transaction_id=process.StoredListeningProcess_transaction_id
+                    )
+                elif (
+                    self.on_listening_reload_exception
+                    == ExceptionOnProcessReloadBehavior.DROP_AND_KEEP_PERSISTED
+                ):
+                    self._logger.error(
+                        f"Dropping persisted process {process.StoredListeningProcess_transaction_id} due to reload exception but keeping it in persistence"
+                    )
+
+                elif (
+                    self.on_listening_reload_exception
+                    == ExceptionOnProcessReloadBehavior.KEEP_AND_RETRY
+                ):
+                    self._logger.error(
+                        f"Keeping persisted process {process.StoredListeningProcess_transaction_id} and retrying later"
+                    )
+                    retry_count = self.retry_attempts.get(
+                        process.StoredListeningProcess_transaction_id, None
+                    )
+                    if retry_count is None:
+                        retry_count = 0
+                    if retry_count < self.max_reload_attempts:
+                        self.retry_attempts[
+                            process.StoredListeningProcess_transaction_id
+                        ] = retry_count + 1
+                        await asyncio.sleep(self.sleeping_before_retry_delay)
+                        asyncio.create_task(self._load_persisted_process(process))
+
+                    self._logger.error(
+                        f"maximum retry attempts reached for process {process.StoredListeningProcess_transaction_id}"
+                    )
+
+                else:
+                    self._logger.error(
+                        f"Unknown behavior for process {process.StoredListeningProcess_transaction_id} due to reload exception"
+                    )
+                    raise e
 
     def set_run_before_timeout_callback(self, callback: RunBeforeTimemoutCallback):
         self._run_before_timeout_callback = callback
@@ -57,6 +189,25 @@ class FedapayEvent:
         self, callback: RunAtPersistedProcessReloadCallback
     ):
         self._run_at_persisted_process_reload_callback = callback
+
+    async def resolve_if_final_event_already_received(self, id_transaction):
+        """
+        Vérifie si un event final n'a pas deja été reçu avant la mise en place de l'ecoute
+
+        Dans certains cas fedapay retourne la webhook immediatement et pour eviter d'attendre un future qui est deja résolu on peut verifier avec cette fonction
+
+        """
+        events = self._event_data.get(id_transaction, None)
+        if events is None:
+            return False
+        for event in events:
+            if event.name in self.final_event_names:
+                self._logger.info(
+                    f"Final event '{event.name}' already received for id_transaction '{id_transaction}'"
+                )
+                await self.resolve(id_transaction)
+                return True
+        return False
 
     async def create_future(
         self, id_transaction: int, timeout: Optional[float] = None
@@ -110,49 +261,6 @@ class FedapayEvent:
         )
 
         return future
-
-    async def _auto_cancel(self, id_transaction: int, timeout: float):
-        self._logger.info(
-            f"Auto-cancel for id_transaction '{id_transaction}' started with timeout {timeout}"
-        )
-        await asyncio.sleep(timeout)
-        if (
-            id_transaction in self._processing_results_futures
-            and not self._processing_results_futures[id_transaction].done()
-        ):
-            self._logger.info(
-                f"Auto-cancel for id_transaction '{id_transaction}' triggered"
-            )
-
-            if self._run_before_timeout_callback:
-                try:
-                    should_cancel = await self._run_before_timeout_callback(
-                        id_transaction
-                    )
-                    if not should_cancel:
-                        self._logger.info(
-                            f"Auto-cancel for id_transaction '{id_transaction}' skipped by callback"
-                        )
-                        return await self.resolve(id_transaction=id_transaction)
-                except Exception as e:
-                    self._logger.error(
-                        f"Error in run_before_timeout_callback for id_transaction '{id_transaction}': {e} -- timeouting by default"
-                    )
-                    pass
-            async with self._processing_results_futures_lock:
-                future = self._processing_results_futures.pop(id_transaction, None)
-            if future and not future.done():
-                self._asyncio_event_loop.call_soon_threadsafe(
-                    future.set_result, EventFutureStatus.TIMEOUT
-                )
-            self._event_persit_storage.delete_process(transaction_id=id_transaction)
-        else:
-            self._logger.info(
-                f"Future for id_transaction '{id_transaction}' already resolved or cancelled before timeout"
-            )
-        self._logger.info(
-            f"Auto-cancel for id_transaction '{id_transaction}' completed"
-        )
 
     async def resolve(self, id_transaction: int):
         self._logger.info(f"Resolving future for id_transaction '{id_transaction}'")
@@ -256,89 +364,3 @@ class FedapayEvent:
             await self._load_persisted_process(process)
         self._logger.info("Loading persisted processes finished")
         print("\n[INFO] Loading persisted processes finished")
-
-    def _persisted_process_reload_callback_exception(self, task: asyncio.Task):
-        try:
-            task.result()
-        
-        except Exception as e:
-            self._logger.debug(
-                f"Erreur dans le persisted_process_reload_callback : {e}",
-                stack_info=True,
-            )
-
-    async def _load_persisted_process(self, process: StoredListeningProcess):
-        if self._run_at_persisted_process_reload_callback:
-            try:
-                task = asyncio.create_task(
-                    self._run_at_persisted_process_reload_callback(
-                        ListeningProcessData.model_validate_json(
-                            process.StoredListeningProcess_process_data
-                        )
-                    )
-                )
-                task.add_done_callback(
-                    self._persisted_process_reload_callback_exception
-                )
-                # si la tache est créer le rôle de cette persistance est atteint donc la perisitance est supprimée
-                # si entre ce moment et le moment ou la tache est executée le backend est redemarrer ou arreté
-                # avant l'exec de reload_future, le process d'ecoute est definitivement perdu pace que la creation du future s'ocuppe
-                # elle meme de la persistance si necessaire et si la tache lancé ici peut ne pas aboutir a
-                # un reload_future en fonction de l'exec du callback
-
-                self._event_persit_storage.delete_process(
-                    transaction_id=process.StoredListeningProcess_transaction_id
-                )
-                self._logger.info(
-                    f"run_at_persisted_process_reload_callback for process {process.StoredListeningProcess_transaction_id} completed successfully"
-                )
-            except Exception as e:
-                self._logger.error(
-                    f"Error in run_at_persisted_process_reload_callback for process {process.StoredListeningProcess_transaction_id}: {e} -- loading failled"
-                )
-                if (
-                    self.on_listening_reload_exception
-                    == ExceptionOnProcessReloadBehavior.DROP_AND_REMOVE_PERSISTANCE
-                ):
-                    self._logger.error(
-                        f"Removing persisted process {process.StoredListeningProcess_transaction_id} due to reload exception"
-                    )
-                    self._event_persit_storage.delete_process(
-                        transaction_id=process.StoredListeningProcess_transaction_id
-                    )
-                elif (
-                    self.on_listening_reload_exception
-                    == ExceptionOnProcessReloadBehavior.DROP_AND_KEEP_PERSISTED
-                ):
-                    self._logger.error(
-                        f"Dropping persisted process {process.StoredListeningProcess_transaction_id} due to reload exception but keeping it in persistence"
-                    )
-
-                elif (
-                    self.on_listening_reload_exception
-                    == ExceptionOnProcessReloadBehavior.KEEP_AND_RETRY
-                ):
-                    self._logger.error(
-                        f"Keeping persisted process {process.StoredListeningProcess_transaction_id} and retrying later"
-                    )
-                    retry_count = self.retry_attempts.get(
-                        process.StoredListeningProcess_transaction_id, None
-                    )
-                    if retry_count is None:
-                        retry_count = 0
-                    if retry_count < self.max_reload_attempts:
-                        self.retry_attempts[
-                            process.StoredListeningProcess_transaction_id
-                        ] = retry_count + 1
-                        await asyncio.sleep(self.sleeping_before_retry_delay)
-                        asyncio.create_task(self._load_persisted_process(process))
-
-                    self._logger.error(
-                        f"maximum retry attempts reached for process {process.StoredListeningProcess_transaction_id}"
-                    )
-
-                else:
-                    self._logger.error(
-                        f"Unknown behavior for process {process.StoredListeningProcess_transaction_id} due to reload exception"
-                    )
-                    raise e
