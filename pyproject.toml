@@ -1,6 +1,6 @@
 [project]
 name = "fedapay_connector"
-version = "1.3.2"
+version = "1.3.3"
 description = "Un client asynchrone robuste pour l'API FedaPay, offrant une gestion automatisée des paiements avec support complet des webhooks."
 readme = "README.md"
 license = { text = "AGPL-3.0-or-later" }

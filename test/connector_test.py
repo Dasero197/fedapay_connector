@@ -24,6 +24,9 @@ async def main():
         elif future_event_status == EventFutureStatus.CANCELLED:
             print("\nTransaction annulée par l'utilisateur\n")
 
+        elif future_event_status == EventFutureStatus.CANCELLED_INTERNALLY:
+            print("\nTransaction annulée en interne -- probable redemarrage ou arret de l'application\n")
+
         else:
             print("\nTransaction réussie\n")
             print(f"\nDonnées finales : {data}\n")

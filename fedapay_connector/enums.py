@@ -42,6 +42,8 @@ class EventFutureStatus(str, Enum):
     CANCELLED = "cancelled"
     TIMEOUT = "timeout"
     RESOLVED = "resolved"
+    CANCELLED_INTERNALLY = "cancelled_internally"
+
 
 
 class TypesPaiement(str, Enum):

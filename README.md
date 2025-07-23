@@ -191,6 +191,9 @@ async def main():
 
     elif status == EventFutureStatus.CANCELLED:
         print("\nTransaction annulée par l'utilisateur\n")
+
+    elif future_event_status == EventFutureStatus.CANCELLED_INTERNALLY:
+            print("\nTransaction annulée en interne -- probable redemarrage ou arret de l'application\n")
     
 
 if __name__ == "__main__":
@@ -235,6 +238,9 @@ async def main():
 
         elif status == EventFutureStatus.CANCELLED:
             print("\nTransaction annulée par l'utilisateur\n")
+
+        elif future_event_status == EventFutureStatus.CANCELLED_INTERNALLY:
+            print("\nTransaction annulée en interne -- probable redemarrage ou arret de l'application\n")
 
     # Creation de l'instance Fedapay Connector
     fedapay = FedapayConnector(use_listen_server= True) 
@@ -380,6 +386,9 @@ async def run_after_finalise(
 
     elif status == EventFutureStatus.CANCELLED:
         print("\nTransaction annulée par l'utilisateur\n")
+    
+    elif future_event_status == EventFutureStatus.CANCELLED_INTERNALLY:
+            print("\nTransaction annulée en interne -- probable redemarrage ou arret de l'application\n")
 
 fedapay.set_payment_callback_function(on_payment)
 fedapay.set_webhook_callback_function(on_webhook)

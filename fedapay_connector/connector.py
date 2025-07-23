@@ -353,7 +353,7 @@ class FedapayConnector:
                 f"Annulation de l'attente pour la transaction {id_transaction} -- arret normal"
             )
             await self._event_manager.cancel(id_transaction)
-            return EventFutureStatus.CANCELLED, None
+            return EventFutureStatus.CANCELLED_INTERNALLY, None
         except Exception as e:
             self._logger.error(
                 f"Erreur dans le callback de rechargement : {e}", stack_info=True
@@ -407,7 +407,7 @@ class FedapayConnector:
                 f"Annulation de l'attente pour la transaction {data.id_transaction} -- arret normal"
             )
             await self._event_manager.cancel(data.id_transaction)
-            return EventFutureStatus.CANCELLED, None
+            return EventFutureStatus.CANCELLED_INTERNALLY, None
 
         except Exception as e:
             self._logger.error(
@@ -675,7 +675,7 @@ class FedapayConnector:
 
         Returns:
             tuple[EventFutureStatus, Optional[list[WebhookTransaction]]]:
-                - Status de l'événement (RESOLVED, TIMEOUT, CANCELLED)
+                - Status de l'événement (RESOLVED, TIMEOUT, CANCELLED, CANCELLED_INTERNALLY)
                 - Liste des webhooks reçus ou None
 
         Raises:
