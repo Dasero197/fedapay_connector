@@ -36,6 +36,7 @@ class TransactionStatus(str, Enum):
     canceled = "canceled"
     declined = "declined"
     deleted = "deleted"
+    expired = "expired"
 
 
 class EventFutureStatus(str, Enum):
