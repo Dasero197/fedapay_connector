@@ -103,13 +103,18 @@ class FedapayConnector:
             self.fedapay_api_url = fedapay_api_url
             self.listen_server_port = listen_server_port
             self.listen_server_endpoint_name = listen_server_endpoint_name
+
+            # contient uniquement les état terminaux d'une transaction
             self.accepted_transaction = [
+                "transaction.refunded"
+                "transaction.transferred"
                 "transaction.canceled",
                 "transaction.declined",
                 "transaction.approved",
                 "transaction.deleted",
                 "transaction.expired",
             ]
+            
             self._event_manager: FedapayEvent = FedapayEvent(
                 self._logger,
                 5,
@@ -363,10 +368,8 @@ class FedapayConnector:
     async def _run_on_reload_callback(self, data: ListeningProcessData):
         try:
             status = await self._check_status(id_transaction=data.id_transaction)
-            if (
-                status.status == TransactionStatus.created
-                or status.status == TransactionStatus.pending
-            ):
+            if status.status == TransactionStatus.pending:
+            
                 # on remet l'écoute en place et on attend le timeout ou une notification de fedapay
 
                 self._logger.info(
@@ -417,10 +420,8 @@ class FedapayConnector:
 
     async def _run_on_transaction_timeout_callback(self, id_transaction: int):
         status = await self._check_status(id_transaction=id_transaction)
-        if (
-            status.status == TransactionStatus.created
-            or status.status == TransactionStatus.pending
-        ):
+        if status.status == TransactionStatus.pending:
+        
             # idéalement faire un appel a fedapay pour cloturer la transaction puis timeout en interne
             # pour que si la page de aiement est tjr dispo dans un client elle ne puisse plus traiter un paiment pour etre
             # sûr de ne pas recevoir un paiement intraçable et innatendu

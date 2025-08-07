@@ -31,11 +31,12 @@ class MethodesPaiement(str, Enum):
 
 class TransactionStatus(str, Enum):
     created = "created"
+    refunded = "refunded"
+    transferred = "transferred"
     pending = "pending"
     approved = "approved"
     canceled = "canceled"
     declined = "declined"
-    deleted = "deleted"
     expired = "expired"
 
 
@@ -46,10 +47,10 @@ class EventFutureStatus(str, Enum):
     CANCELLED_INTERNALLY = "cancelled_internally"
 
 
-
 class TypesPaiement(str, Enum):
     AVEC_REDIRECTION = "avec_redirection"
     SANS_REDIRECTION = "sans_redirection"
+
 
 class ExceptionOnProcessReloadBehavior(str, Enum):
     DROP_AND_REMOVE_PERSISTANCE = "drop_and_remove_persistence"
