@@ -15,6 +15,7 @@ Un client asynchrone robuste pour l'API FedaPay, offrant une gestion automatisé
 - 💾 **Persistence Automatique** - Sauvegarde et restauration des transactions
 - 🎯 **Callbacks Personnalisables** - Hooks pour tous les événements
 - 🚀 **Simple à Utiliser** - API intuitive et documentation complète
+- 🛠️ **Module bas niveau pour controle granulaire** - Pour les dev qui veulent avoir plus de controle
 
 ## Installation
 
@@ -34,7 +35,7 @@ poetry add fedapay_connector
 
 - Python 3.9+
 - Un compte FedaPay avec les clés API
-- Pour le serveur webhook : une URL accessible publiquement
+- Pour le serveur webhook : une URL accessible publiquement pointant vers votre serveur (via ngrok, un reverse proxy, etc.)
 
 ### Variables d'Environnement
 
@@ -54,9 +55,9 @@ FEDAPAY_AUTH_KEY=webhook_secret_123456789
 FEDAPAY_ENDPOINT_NAME=webhooks
 ```
 
-## 📚 Guide d'Utilisation
+## 📚 Guide d'Utilisation 
 
-### Modes d'Utilisation
+### Modes d'Utilisation module FedapayConnector
 
 1. **Mode Simple** (non recommandé)
    - Polling manuel du statut
@@ -77,7 +78,7 @@ FEDAPAY_ENDPOINT_NAME=webhooks
    - Intégration avec FastAPI/Django/etc
    - Gestion personnalisée des webhooks
 
-### 1. Mode Simple 
+#### 1. Mode Simple 
 
 ```python
 from fedapay_connector import Pays, MethodesPaiement, FedapayConnector, PaiementSetup, UserData, EventFutureStatus, PaymentHistory, WebhookHistory
@@ -120,7 +121,7 @@ if __name__ == "__main__":
     asyncio.run(main())
 ```
 
-### 2. Mode Serveur Intégré
+#### 2. Mode Serveur Intégré
 
 Cette option nécéssite que vous ayez un reverse proxy pointant sur votre machine au port d'ecoute configurer pour le serveur
 (défaut : 3000) depuis une url qui sera utiliseée pour la configuration des webhook sur votre panel fedapay. 
@@ -192,7 +193,7 @@ async def main():
     elif status == EventFutureStatus.CANCELLED:
         print("\nTransaction annulée par l'utilisateur\n")
 
-    elif future_event_status == EventFutureStatus.CANCELLED_INTERNALLY:
+    elif status == EventFutureStatus.CANCELLED_INTERNALLY:
             print("\nTransaction annulée en interne -- probable redemarrage ou arret de l'application\n")
     
 
@@ -201,7 +202,7 @@ if __name__ == "__main__":
 ```
 
 
-### 3. Mode Serveur Intégré (options avancées)
+#### 3. Mode Serveur Intégré (options avancées)
 
 ```python
 from fedapay_connector import Pays, MethodesPaiement, FedapayConnector, PaiementSetup, UserData, EventFutureStatus, PaymentHistory, WebhookHistory
@@ -239,7 +240,7 @@ async def main():
         elif status == EventFutureStatus.CANCELLED:
             print("\nTransaction annulée par l'utilisateur\n")
 
-        elif future_event_status == EventFutureStatus.CANCELLED_INTERNALLY:
+        elif status == EventFutureStatus.CANCELLED_INTERNALLY:
             print("\nTransaction annulée en interne -- probable redemarrage ou arret de l'application\n")
 
     # Creation de l'instance Fedapay Connector
@@ -261,14 +262,14 @@ async def main():
     # Configuration paiement
     setup = PaiementSetup(
         pays=Pays.benin,
-        method=MethodesPaiement.mtn_open
+        method=MethodesPaiement.moov
     )
     
     client = UserData(
         nom="Doe",
         prenom="John",
         email="john@example.com",
-        tel="0162626262"
+        tel="0164000001"
     )
 
     # Exécution paiement
@@ -280,16 +281,14 @@ async def main():
     )
 
     # Attente résultat
-    status, webhooks = await fedapay.fedapay_finalise(resp.id_transaction)
-
-    await run_after_finalise(status, webhooks)
+    status, webhooks = await fedapay.fedapay_finalise(resp.transaction.id)
 
 
 if __name__ == "__main__":
     asyncio.run(main())
 ```
 
-### 4. Mode API Existante (Intégration FastAPI ou framework similaire)
+#### 4. Mode API Existante (Intégration FastAPI ou framework similaire)
 
 Dans des cas d'usage comme pour un backend FastAPI vous devrez faire l'initialisation du module dans le lifespan au demarrage de FastAPI puis l'utiliser directement dans vos logiques métiers pour le traitement des transaction.
 
@@ -343,6 +342,51 @@ async def fedapay_webhook(request: Request):
 Si les methodes de paiement que vous souhaiter utilisés ne sont pas disponibles en paiement sans redirection vous devrez recupérer le paiement link et le retourner au front end pour affichage dans une webview ou un element similaire pour finalisation par l'utilisateur.
 Le satut sera toutefois toujours capturer par le backend directement donc il n'est pas neccessaire de le recupérer coté client. 
 
+### Modes d'Utilisation module Integration (Utilisation avancée)
+
+Pour les utilisateurs qui souhaitent un contrôle plus granulaire des appels HTTP vers l'API FedaPay (CRUD complet sur Transactions, Events, Balances, Currencies, Logs, Webhooks), utilisez la classe `Integration` fournie dans le package.
+
+Principales caractéristiques :
+- Fournit un point d'entrée unique pour les services bas-niveau : `Transactions`, `Balances`, `Currencies`, `Events`, `Logs`, `Webhooks`.
+- Utilisée quand vous ne voulez pas du workflow automatique (Listeners / Futures) géré par `FedapayConnector` et préférez appeler manuellement les endpoints.
+
+Constructeur :
+- `Integration(api_url: str = os.getenv("FEDAPAY_API_URL"), logger: logging.Logger = None, default_api_key: Optional[str] = os.getenv("FEDAPAY_API_KEY"))`
+- Remarque importante : `api_url` et `default_api_key` sont requis (ou doivent être fournis via les variables d'environnement). Si l'un d'eux manque, le constructeur lèvera `ValueError`.
+
+Exemple d'utilisation basique :
+
+```python
+import asyncio
+from fedapay_connector.integration import Integration
+
+async def main():
+    integ = Integration()  # lit FEDAPAY_API_URL et FEDAPAY_API_KEY depuis l'env
+
+    # Récupérer une transaction par ID Fedapay
+    tx = await integ.get_transaction_by_fedapay_id("12345")
+    print(tx)
+
+    # Créer une transaction (voir models.PaiementSetup / UserData)
+    setup = PaiementSetup(...)
+    client = UserData(...)
+    new_tx = await integ.create_transaction(setup, client, montant_paiement=1000)
+
+    # Récupérer lien / token
+    token = await integ.get_transaction_link(new_tx.id)
+
+    # Lister les événements
+    events = await integ.get_all_events(params={})
+
+asyncio.run(main())
+```
+
+Notes pratiques :
+- Les méthodes `Integration` renvoient les modèles Pydantic présents dans `fedapay_connector.models` (ex: `Transaction`, `TransactionListResponse`, `EventResponse`).
+- Pour les tests, mockez les méthodes des services internes (par ex. `Transactions._get_transaction_by_fedapay_id`) lorsque vous vérifiez la logique métier dépendante du réseau.
+- `Integration` est synchrone avec l'API asynchrone (utilise `aiohttp` en interne) — appelez-le depuis une coroutine ou via `asyncio.run()`.
+
+
 ## Fonctionnalités Avancées
 
 ### Gestion des Webhooks
@@ -354,19 +398,26 @@ fedapay = FedapayConnector(
     listen_server_port=3000,
     listen_server_endpoint_name="webhooks"
 )
-fedapay.start_webhook_server()
+fedapay.start_webhook_server()  # convenience wrapper -> calls `WebhookServer.start_webhook_listenning()`
 
 # 2. Intégration API Existante
 fedapay = FedapayConnector(use_listen_server=False)
 await fedapay.fedapay_save_webhook_data(webhook_data)
 ```
 
+Cycle de vie du serveur interne:
+- Le serveur interne est lancé dans un thread d'arrière-plan. FedapayConnector expose :
+    - `start_webhook_server()` -> Démarre le serveur interne .
+    - `shutdown_cleanup()` -> méthode asynchrone qui annule les futures d'événements en attente, attend les tâches de rappel (avec un délai d'attente) et arrête le serveur webhook via `stop_webhook_listenning()`.
+
+Recommendation: call `await fedapay.shutdown_cleanup()` from your application's shutdown handler (FastAPI lifespan or SIGTERM) to ensure persisted listeners and callback tasks are cleaned up correctly.
+
 ### Callbacks Personnalisés
 
 ```python
 async def on_payment(payment: PaymentHistory):
     """Appelé après chaque paiement"""
-    print(f"Nouveau paiement: {payment.id}")
+    print(f"Nouveau paiement: {payment.transaction.id}")
     
 async def on_webhook(webhook: WebhookHistory):
     """Appelé pour chaque webhook"""
