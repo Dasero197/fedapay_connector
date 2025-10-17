@@ -1,8 +1,9 @@
 [project]
 name = "fedapay_connector"
-version = "1.3.5"
+version = "2.0.0"
 description = "Un client asynchrone robuste pour l'API FedaPay, offrant une gestion automatisée des paiements avec support complet des webhooks."
 readme = "README.md"
+Changelog = "CHANGELOG.md"
 license = { text = "AGPL-3.0-or-later" }
 authors = [
     { name = "ASSOGBA Dayane", email = "assogbadayane197@gmail.com" }
@@ -11,7 +12,7 @@ maintainers = [
   { name = "ASSOGBA Dayane", email = "assogbadayane197@gmail.com" }
 ]
 
-keywords = ["fedapay", "paiement", "asynchrone", "API", "connector"]
+keywords = ["fedapay", "paiement", "asynchrone", "API", "connector", "integration"]
 classifiers = [
     "Intended Audience :: Developers",
     "License :: OSI Approved :: GNU Affero General Public License v3 or later (AGPLv3+)",
@@ -39,3 +40,4 @@ build-backend = "hatchling.build"
 [project.urls]
 Homepage = "https://github.com/Dasero197/fedapay_connector"
 Issues = "https://github.com/Dasero197/fedapay_connector/issues"
+Changelog = "https://github.com/Dasero197/fedapay_connector/blob/main/CHANGELOG.md"

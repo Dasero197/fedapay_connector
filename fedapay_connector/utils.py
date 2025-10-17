@@ -55,6 +55,7 @@ def initialize_logger(
     logger.info("Logger initialisé avec succès.")
     return logger
 
+
 def get_currency(pays: Pays):
     """
     Fonction interne pour obtenir la devise du pays.
@@ -66,6 +67,7 @@ def get_currency(pays: Pays):
         str: Code ISO de la devise du pays.
     """
     return Monnaies_Map.get(pays).value
+
 
 def verify_signature(payload: bytes, sig_header: str, secret: str):
     # Extraire le timestamp et la signature depuis le header
@@ -92,6 +94,7 @@ def verify_signature(payload: bytes, sig_header: str, secret: str):
 
     return True
 
+
 def validate_callback(
     callback: Callable, callback_name: str, must_be_async: Optional[bool] = True
 ) -> None:
@@ -111,3 +114,16 @@ def validate_callback(
 
     if must_be_async and not inspect.iscoroutinefunction(callback):
         raise TypeError(f"{callback_name} must be an async function")
+
+
+def get_auth_header(api_key: Optional[str]):
+    """Génère l'en-tête d'authentification."""
+    key = api_key if api_key else os.getenv("FEDAPAY_API_KEY")
+    if not key:
+        raise ValueError(
+            "API Key non fournie et non trouvée dans les variables d'environnement."
+        )
+    return {
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+    }

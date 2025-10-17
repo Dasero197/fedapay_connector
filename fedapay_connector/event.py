@@ -31,7 +31,9 @@ class FedapayEvent:
         on_listening_reload_exception: ExceptionOnProcessReloadBehavior,
         final_event_names: list[str],
         sleeping_before_retry_delay: Optional[float] = 5,
-        db_url: Optional[str] = os.getenv("FEDAPAY_DB_URL", "sqlite:///fedapay_connector_persisted_data/processes.db"),
+        db_url: Optional[str] = os.getenv(
+            "FEDAPAY_DB_URL", "sqlite:///fedapay_connector_persisted_data/processes.db"
+        ),
     ):
         if self._init is False:
             self._logger = logger
@@ -40,7 +42,9 @@ class FedapayEvent:
             self._processing_results_futures: dict[int, asyncio.Future] = {}
             self._event_data: dict[int, list[WebhookTransaction]] = {}
             self._asyncio_event_loop = asyncio.get_event_loop()
-            self._event_persit_storage = ProcessPersistance(logger=logger, db_url=db_url)
+            self._event_persit_storage = ProcessPersistance(
+                logger=logger, db_url=db_url
+            )
             self._run_before_timeout_callback: Optional[RunBeforeTimemoutCallback] = (
                 None
             )
