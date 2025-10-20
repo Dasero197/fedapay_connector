@@ -795,7 +795,7 @@ class FedapayConnector:
                 self._logger.warning(error)
                 raise TransactionIsNotPendingAnymore(e)
             else:
-                error = f"Erreur inattendue lors de la suppression de la transaction {id_transaction} -- code: {result.status_code} -- message: {result.message}"
+                error = f"Erreur inattendue lors de la suppression de la transaction {id_transaction} -- code: {e.status} -- message: {e.message}"
                 self._logger.error(error)
                 raise e
 
