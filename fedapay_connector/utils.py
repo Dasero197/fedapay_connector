@@ -15,7 +15,7 @@ def initialize_logger(
     Le fichier de log est enregistré dans le dossier `log` avec un fichier journalier."""
 
     # Créer le dossier `log` s'il n'existe pas
-    log_dir = "logs"
+    log_dir = "logs/Fedapay_Connector"
     if not os.path.exists(log_dir):
         os.makedirs(log_dir)
 

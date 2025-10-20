@@ -1,6 +1,6 @@
 [project]
 name = "fedapay_connector"
-version = "2.0.0"
+version = "2.0.1"
 description = "Un client asynchrone robuste pour l'API FedaPay, offrant une gestion automatisée des paiements avec support complet des webhooks."
 readme = "README.md"
 Changelog = "CHANGELOG.md"

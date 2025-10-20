@@ -17,6 +17,7 @@ Vous devriez avoir reçu une copie de la GNU Affero General Public License
 avec ce programme. Si ce n'est pas le cas, consultez <https://www.gnu.org/licenses/>.
 """
 
+import aiohttp
 from .exceptions import (
     ConfigError,
     FedapayServerError,
@@ -258,17 +259,12 @@ class FedapayConnector:
         )
         if transaction.status == TransactionStatus.pending:
             # au timeout on suprime la transaction pour qu'elle ne soit plus disponible pour le client
-            resp = await self._transactions_service._delete_transaction(
-                fedapay_id=id_transaction, api_key=self.default_api_key
-            )
-
-            if resp.delete_status:
-                # Transaction supprimée coté fedapay
-                # On peut timeout la transaction en sécurité
-                return True
-            else:
-                # La transaction a changé d'etat entre temps ou une erreur est survenue
-                if resp.status_code == 403:
+            try:
+                resp = await self._transactions_service._delete_transaction(
+                    fedapay_id=id_transaction, api_key=self.default_api_key
+                )
+            except aiohttp.ClientResponseError as e:
+                if e.status == 403:
                     # operation non autorisée le status de la transaction a probablement changé entre temps
                     # on refresh la transaction et on resolve
                     transaction = (
@@ -283,12 +279,19 @@ class FedapayConnector:
                         )
                     )
                     return False
+
                 else:
                     # une erreur inattendue est survenue
                     error = f"Erreur inattendue lors de la suppression de la transaction {id_transaction} -- status code: {resp.status_code} -- message: {resp.message}"
                     self._logger.error(error)
                     # l'erreur déclenchera le timeout de la transaction
                     return True
+
+            if resp.delete_status:
+                # Transaction supprimée coté fedapay
+                # On peut timeout la transaction en sécurité
+                return True
+
         else:
             # Pour une raison ou une autre on a pas recu la notification mais le status a changé
             # On ne timeout plus on resolve plutot
@@ -765,36 +768,36 @@ class FedapayConnector:
             TransactionDeleteStatus: Objet indiquant le statut de la tentative de suppression.
 
         Raises:
-            TransactionAlreadyApproved: Si la transaction ne peut pas être supprimée (ex: déjà approuvée ou terminée).
-            FedapayServerError: Si une erreur d'API inattendue survient lors de la tentative de suppression.
+            TransactionIsNotPendingAnymore: Si la transaction ne peut pas être supprimée (ex: déjà approuvée ou terminée).
+            ClientResponseError: Si une erreur d'API inattendue survient lors de la tentative de suppression.
         """
         self._logger.info(
             f"Tentative de suppression de la transaction ID: {id_transaction}."
         )
 
-        result = await self._transactions_service._delete_transaction(
-            fedapay_id=id_transaction, api_key=api_key or self.default_api_key
-        )
+        try:
+            result = await self._transactions_service._delete_transaction(
+                fedapay_id=id_transaction, api_key=api_key or self.default_api_key
+            )
 
-        if result.delete_status:
-            self._logger.info(
-                f"Transaction avec l'id {id_transaction} supprimée avec succès (statut: {result.status_code})."
-            )
-            await self._event_manager.cancel(id_transaction=id_transaction)
-            self._logger.info(
-                f"Écoute interne pour la transaction {id_transaction} annulée."
-            )
-        else:
-            if result.status_code == 403:
+            if result.delete_status:
+                self._logger.info(
+                    f"Transaction avec l'id {id_transaction} supprimée avec succès (statut: {result.status_code})."
+                )
+                await self._event_manager.cancel(id_transaction=id_transaction)
+                self._logger.info(
+                    f"Écoute interne pour la transaction {id_transaction} annulée."
+                )
+            return result
+        except aiohttp.ClientResponseError as e:
+            if e.status == 403:
                 error = f"La transaction {id_transaction} ne peut être supprimée (statut final ou non autorisé, code: 403)."
                 self._logger.warning(error)
-                raise TransactionIsNotPendingAnymore(error)
+                raise TransactionIsNotPendingAnymore(e)
             else:
                 error = f"Erreur inattendue lors de la suppression de la transaction {id_transaction} -- code: {result.status_code} -- message: {result.message}"
                 self._logger.error(error)
-                raise FedapayServerError(error)
-
-        return result
+                raise e
 
     async def load_persisted_listening_processes(self):
         """

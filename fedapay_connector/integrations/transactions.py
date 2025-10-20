@@ -230,7 +230,7 @@ class Transactions:
 
     async def _delete_transaction(
         self, fedapay_id: str, api_key: Optional[str] = os.getenv("FEDAPAY_API_KEY")
-    ):
+    ) -> TransactionDeleteStatus:
         """
         Annule et supprime définitivement une transaction par son ID, si son statut le permet.
         Cette opération n'est généralement possible que si le paiement n'est pas encore initié.
@@ -248,7 +248,7 @@ class Transactions:
 
         async with aiohttp.ClientSession(
             headers=header,
-            raise_for_status=False,
+            raise_for_status=True,
         ) as session:
             async with session.delete(
                 f"{self.fedapay_api_url}/v1/transactions/{fedapay_id}"
@@ -260,15 +260,7 @@ class Transactions:
                     return TransactionDeleteStatus(
                         delete_status=True, status_code=response.status
                     )
-
-                self._logger.error(
-                    f"Échec de la suppression de la transaction {fedapay_id}. Statut: {response.status}, Réponse: {await response.text()}"
-                )
-                return TransactionDeleteStatus(
-                    delete_status=False,
-                    status_code=response.status,
-                    message=(await response.json()).get("message"),
-                )
+                response.raise_for_status()
 
     async def _update_transaction(
         self,
